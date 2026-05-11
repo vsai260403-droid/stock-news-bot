@@ -1,0 +1,17 @@
+# 민감 정보 / 설정
+config.json
+
+# 런타임 생성 파일
+seen_news.json
+seen_sec.json
+ticker_cik_cache.json
+stock_alarm.log
+*.log
+
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+.env
+venv/
+.venv/

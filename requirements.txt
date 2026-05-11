@@ -1,0 +1,5 @@
+yfinance>=0.2.36
+requests>=2.31.0
+schedule>=1.2.1
+discord.py>=2.3.2
+feedparser>=6.0.11
