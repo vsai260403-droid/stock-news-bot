@@ -189,6 +189,19 @@ def start_bot_thread(config: dict) -> Optional[threading.Thread]:
     prefix = config.get("discord_command_prefix", "!")
 
     def _run():
+        import asyncio
+        import ssl
+        import certifi
+
+        # aiohttp 가 내부에서 ssl.create_default_context() 를 직접 호출하므로
+        # certifi 인증서를 로드하도록 전역 패치
+        _orig_ctx = ssl.create_default_context
+        def _patched_ctx(*args, **kwargs):
+            ctx = _orig_ctx(*args, **kwargs)
+            ctx.load_verify_locations(certifi.where())
+            return ctx
+        ssl.create_default_context = _patched_ctx
+
         bot = _make_bot(prefix)
         if bot is None:
             return
