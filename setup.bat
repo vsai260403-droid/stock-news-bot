@@ -35,8 +35,13 @@ echo      python ticker_manager.py set-webhook YOUR_WEBHOOK_URL
 echo.
 echo   3. 티커 추가:
 echo      python ticker_manager.py add AAPL TSLA NVDA
+echo      (알려진 티커는 트위터 계정이 자동 등록됩니다)
 echo.
-echo   4. 실행:
+echo   4. [선택] 트위터 알람 활성화:
+echo      python ticker_manager.py twitter-on
+echo      python ticker_manager.py twitter-list   ← 등록 계정 확인
+echo.
+echo   5. 실행:
 echo      python main.py
 echo      (또는 run.bat 더블클릭)
 echo ============================================================
