@@ -9,16 +9,24 @@ discord_bot.py - Discord Bot을 통한 티커 관리 명령어
   5. config.json 의 discord_bot_token 에 Bot Token 입력
 
 【명령어】
-  !add AAPL MSFT    — 티커 추가
-  !remove TSLA      — 티커 제거
-  !list             — 등록된 티커 목록
-  !status           — 시스템 상태
-  !help             — 도움말
+  !add AAPL MSFT      — 티커 추가 (알려진 티커는 트위터 계정 자동 등록)
+  !remove TSLA        — 티커 제거
+  !list               — 등록된 티커 목록
+  !status             — 시스템 상태
+  !help               — 도움말
+
+  !twitter-on         — 트위터 알람 활성화
+  !twitter-off        — 트위터 알람 비활성화
+  !twitter-list       — 티커별 등록 트위터 계정 확인
+  !twitter-add TSLA @elonmusk @Tesla  — 계정 추가
+  !twitter-remove TSLA @elonmusk      — 계정 제거
 """
 import json
 import logging
 import threading
 from typing import Optional
+
+from twitter_fetcher import KNOWN_ACCOUNTS
 
 logger = logging.getLogger(__name__)
 
@@ -73,6 +81,7 @@ def _make_bot(prefix: str):
         current_set = set(t.upper() for t in cfg.get("tickers", []))
         added, already = [], []
 
+        twitter_accounts: dict = cfg.setdefault("twitter_accounts", {})
         for raw in tickers:
             t = raw.upper().strip()
             if not t.isalpha() or len(t) > 10:
@@ -83,15 +92,20 @@ def _make_bot(prefix: str):
                 cfg["tickers"].append(t)
                 current_set.add(t)
                 added.append(t)
+                # 알려진 티커면 트위터 계정 자동 등록 (기존 설정은 덮어쓰지 않음)
+                if t not in twitter_accounts and t in KNOWN_ACCOUNTS:
+                    twitter_accounts[t] = KNOWN_ACCOUNTS[t]
 
         if added:
             _save_config(cfg)
 
         lines = []
-        if added:
-            lines.append(f"✅ 추가됨: **{', '.join(added)}**")
-        if already:
-            lines.append(f"⚠️ 이미 등록됨: {', '.join(already)}")
+        for t in added:
+            accs = cfg.get("twitter_accounts", {}).get(t, [])
+            acc_str = f"  (트위터 자동: {', '.join('@' + a for a in accs)})" if accs else ""
+            lines.append(f"✅ **{t}** 추가됨{acc_str}")
+        for t in already:
+            lines.append(f"⚠️ **{t}** 이미 등록됨")
         await ctx.send("\n".join(lines) or "추가할 유효한 티커가 없습니다.")
 
     # ── !remove ───────────────────────────────────────────────────────────────
@@ -135,6 +149,125 @@ def _make_bot(prefix: str):
         chunk = " | ".join(f"**{t}**" for t in tickers)
         await ctx.send(f"📋 모니터링 중인 티커 ({len(tickers)}개)\n{chunk}")
 
+    # ── !twitter-on ───────────────────────────────────────────────────────────
+    @bot.command(name="twitter-on")
+    async def cmd_twitter_on(ctx):
+        cfg = _load_config()
+        cfg["monitor_twitter"] = True
+        _save_config(cfg)
+        accounts = cfg.get("twitter_accounts", {})
+        tickers = cfg.get("tickers", [])
+        registered = [t for t in tickers if t in accounts and accounts[t]]
+        if registered:
+            await ctx.send(
+                f"🐦 트위터 알람 **ON**\n"
+                f"모니터링 계정: " +
+                ", ".join(
+                    f"{t}({', '.join('@'+a for a in accounts[t])})"
+                    for t in registered
+                )
+            )
+        else:
+            await ctx.send(
+                "🐦 트위터 알람 **ON**\n"
+                "⚠️ 등록된 트위터 계정이 없습니다. `!twitter-add TSLA @elonmusk` 으로 추가하세요."
+            )
+
+    # ── !twitter-off ──────────────────────────────────────────────────────────
+    @bot.command(name="twitter-off")
+    async def cmd_twitter_off(ctx):
+        cfg = _load_config()
+        cfg["monitor_twitter"] = False
+        _save_config(cfg)
+        await ctx.send("🔕 트위터 알람 **OFF**")
+
+    # ── !twitter-list ─────────────────────────────────────────────────────────
+    @bot.command(name="twitter-list")
+    async def cmd_twitter_list(ctx):
+        cfg = _load_config()
+        accounts: dict = cfg.get("twitter_accounts", {})
+        tickers = cfg.get("tickers", [])
+        tw_on = cfg.get("monitor_twitter", False)
+        status_str = "🟢 ON" if tw_on else "🔴 OFF"
+
+        if not accounts:
+            await ctx.send(
+                f"🐦 트위터 알람: {status_str}\n"
+                "등록된 계정 없음. `!twitter-add TSLA @elonmusk @Tesla` 으로 추가하세요."
+            )
+            return
+
+        lines = [f"🐦 트위터 알람: {status_str}"]
+        for ticker, accs in sorted(accounts.items()):
+            mark = " *(티커 미등록)*" if ticker not in tickers else ""
+            acc_str = ", ".join(f"[@{a}](https://twitter.com/{a})" for a in accs)
+            lines.append(f"• **{ticker}**{mark}: {acc_str}")
+        await ctx.send("\n".join(lines))
+
+    # ── !twitter-add ──────────────────────────────────────────────────────────
+    @bot.command(name="twitter-add")
+    async def cmd_twitter_add(ctx, ticker: str = "", *usernames):
+        if not ticker or not usernames:
+            await ctx.send("사용법: `!twitter-add TSLA @elonmusk @Tesla`")
+            return
+
+        ticker = ticker.upper().strip()
+        cfg = _load_config()
+        accounts: dict = cfg.setdefault("twitter_accounts", {})
+        existing: list = accounts.setdefault(ticker, [])
+        added = []
+
+        for raw in usernames:
+            username = raw.lstrip("@").strip()
+            if not username:
+                continue
+            if username in existing:
+                pass
+            else:
+                existing.append(username)
+                added.append(username)
+
+        if added:
+            _save_config(cfg)
+            await ctx.send(
+                f"✅ **{ticker}** 트위터 계정 추가: {', '.join('@'+a for a in added)}"
+            )
+        else:
+            await ctx.send(f"⚠️ 추가할 새 계정이 없습니다. (이미 등록됨)")
+
+    # ── !twitter-remove ───────────────────────────────────────────────────────
+    @bot.command(name="twitter-remove")
+    async def cmd_twitter_remove(ctx, ticker: str = "", *usernames):
+        if not ticker or not usernames:
+            await ctx.send("사용법: `!twitter-remove TSLA @elonmusk`")
+            return
+
+        ticker = ticker.upper().strip()
+        cfg = _load_config()
+        accounts: dict = cfg.get("twitter_accounts", {})
+        existing: list = accounts.get(ticker, [])
+        removed, not_found = [], []
+
+        for raw in usernames:
+            username = raw.lstrip("@").strip()
+            if username in existing:
+                existing.remove(username)
+                removed.append(username)
+            else:
+                not_found.append(username)
+
+        if removed:
+            if not existing:
+                accounts.pop(ticker, None)
+            _save_config(cfg)
+
+        lines = []
+        if removed:
+            lines.append(f"🗑️ **{ticker}** 트위터 계정 제거: {', '.join('@'+a for a in removed)}")
+        if not_found:
+            lines.append(f"⚠️ 등록되지 않은 계정: {', '.join('@'+a for a in not_found)}")
+        await ctx.send("\n".join(lines) or "제거할 계정이 없습니다.")
+
     # ── !status ───────────────────────────────────────────────────────────────
     @bot.command(name="status")
     async def cmd_status(ctx):
@@ -143,12 +276,21 @@ def _make_bot(prefix: str):
         news_interval = cfg.get("check_interval_seconds", 300)
         sec_interval = cfg.get("sec_check_interval_seconds", 1800)
         monitor_sec = cfg.get("monitor_sec_filings", False)
+        monitor_twitter = cfg.get("monitor_twitter", False)
         sources = cfg.get("news_sources", ["yahoo", "google_rss"])
         finnhub_key = cfg.get("finnhub_api_key", "").strip()
+        twitter_accounts: dict = cfg.get("twitter_accounts", {})
 
         finnhub_str = "✅ 활성화" if finnhub_key else "❌ API 키 없음"
         sec_str = f"ON ({sec_interval}초)" if monitor_sec else "OFF"
-        ticker_str = ", ".join(tickers) if tickers else "없음"
+        twitter_str = "🟢 ON" if monitor_twitter else "🔴 OFF"
+
+        ticker_lines = []
+        for t in tickers:
+            accs = twitter_accounts.get(t, [])
+            acc_str = f" [{', '.join('@'+a for a in accs)}]" if accs else ""
+            ticker_lines.append(f"`{t}`{acc_str}")
+        ticker_str = ", ".join(ticker_lines) if ticker_lines else "없음"
 
         msg = (
             "**📊 시스템 상태**\n"
@@ -156,7 +298,8 @@ def _make_bot(prefix: str):
             f"• 뉴스 체크 주기: {news_interval}초\n"
             f"• 뉴스 소스: {', '.join(sources)}\n"
             f"• Finnhub: {finnhub_str}\n"
-            f"• SEC 공시 감시: {sec_str}"
+            f"• SEC 공시 감시: {sec_str}\n"
+            f"• 트위터 알람: {twitter_str}"
         )
         await ctx.send(msg)
 
@@ -165,10 +308,20 @@ def _make_bot(prefix: str):
     async def cmd_help(ctx):
         msg = (
             "**📈 주식 알람 봇 명령어**\n"
-            "`!add AAPL TSLA` — 티커 추가\n"
+            "\n"
+            "**[ 티커 관리 ]**\n"
+            "`!add AAPL TSLA` — 티커 추가 (알려진 티커는 트위터 자동 등록)\n"
             "`!remove TSLA` — 티커 제거\n"
             "`!list` — 등록된 티커 목록\n"
             "`!status` — 시스템 상태 확인\n"
+            "\n"
+            "**[ 트위터 관리 ]**\n"
+            "`!twitter-on` — 트위터 알람 활성화\n"
+            "`!twitter-off` — 트위터 알람 비활성화\n"
+            "`!twitter-list` — 티커별 트위터 계정 목록\n"
+            "`!twitter-add TSLA @elonmusk @Tesla` — 계정 추가\n"
+            "`!twitter-remove TSLA @elonmusk` — 계정 제거\n"
+            "\n"
             "`!help` — 이 도움말"
         )
         await ctx.send(msg)
