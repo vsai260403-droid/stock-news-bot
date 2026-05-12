@@ -8,5 +8,19 @@
   "check_interval_seconds": 300,
   "monitor_sec_filings": true,
   "sec_form_types": ["8-K"],
-  "sec_check_interval_seconds": 1800
+  "sec_check_interval_seconds": 1800,
+  "monitor_twitter": false,
+  "twitter_check_interval_seconds": 600,
+  "twitter_accounts": {
+    "TSLA": ["Tesla", "elonmusk"],
+    "AAPL": ["Apple", "tim_cook"],
+    "NVDA": ["nvidia", "JensenHuang"]
+  },
+  "nitter_instances": [
+    "https://nitter.privacydev.net",
+    "https://nitter.poast.org",
+    "https://nitter.catsarch.com",
+    "https://nitter.unixfox.eu",
+    "https://nitter.1d4.us"
+  ]
 }
