@@ -88,6 +88,47 @@ def send_news_alert(webhook_url: str, item: Dict[str, Any]) -> bool:
     return _post(webhook_url, payload)
 
 
+def send_tweet_alert(webhook_url: str, item: Dict[str, Any]) -> bool:
+    """Twitter/X 트윗 알람을 Discord로 전송합니다."""
+    ticker = item.get("ticker", "")
+    username = item.get("username", "")
+    title = item.get("title", "")[:250]
+    text = item.get("text", "")[:500]
+    link: Optional[str] = item.get("link") or None
+    publish_time = item.get("publish_time", 0)
+
+    # summary가 title과 같으면 중복 방지
+    description = text if (text and text != title) else title
+
+    embed: Dict[str, Any] = {
+        "title": f"🐦  [{ticker}]  @{username}",
+        "color": 1942002,  # 트위터 파랑
+        "description": description[:500] if description else "(내용 없음)",
+        "fields": [
+            {
+                "name": "게시 시간",
+                "value": _fmt_local(publish_time),
+                "inline": True,
+            },
+            {
+                "name": "계정",
+                "value": f"[@{username}](https://twitter.com/{username})",
+                "inline": True,
+            },
+        ],
+        "footer": {"text": f"Twitter/X Alert  •  {ticker}"},
+        "timestamp": _fmt_iso_utc(publish_time),
+    }
+    if link:
+        embed["url"] = link
+
+    payload = {
+        "username": "주식 뉴스 봇 📈",
+        "embeds": [embed],
+    }
+    return _post(webhook_url, payload)
+
+
 def send_sec_alert(webhook_url: str, item: Dict[str, Any]) -> bool:
     """SEC EDGAR 공시 알람을 Discord로 전송합니다."""
     ticker = item.get("ticker", "")

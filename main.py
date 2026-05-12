@@ -12,9 +12,10 @@ from typing import Set
 import schedule
 
 from discord_bot import start_bot_thread
-from discord_notifier import send_news_alert, send_sec_alert
+from discord_notifier import send_news_alert, send_sec_alert, send_tweet_alert
 from news_fetcher import fetch_all_news
 from sec_fetcher import fetch_sec_filings
+from twitter_fetcher import fetch_all_tweets
 
 # ─── 로깅 설정 ────────────────────────────────────────────────────────────────
 logging.basicConfig(
@@ -31,6 +32,7 @@ logger = logging.getLogger(__name__)
 CONFIG_FILE = "config.json"
 SEEN_NEWS_FILE = "seen_news.json"
 SEEN_SEC_FILE = "seen_sec.json"
+SEEN_TWEETS_FILE = "seen_tweets.json"
 
 
 # ─── 유틸 함수 ────────────────────────────────────────────────────────────────
@@ -119,6 +121,37 @@ def check_sec(config: dict, seen: Set[str], initial: bool = False) -> int:
     return count
 
 
+# ─── 트위터 체크 ──────────────────────────────────────────────────────────────
+def check_tweets(config: dict, seen: Set[str], initial: bool = False) -> int:
+    """등록된 트위터 계정에서 새 트윗을 확인하고 Discord로 전송합니다."""
+    if not config.get("monitor_twitter", False):
+        return 0
+
+    webhook_url = config["discord_webhook_url"]
+    tickers = config.get("tickers", [])
+    count = 0
+
+    for ticker in tickers:
+        items = fetch_all_tweets(ticker, config)
+        for item in items:
+            item_id = item["id"]
+            if not item_id or item_id in seen:
+                continue
+            seen.add(item_id)
+            if not initial:
+                if send_tweet_alert(webhook_url, item):
+                    count += 1
+                    logger.info(
+                        "[%s] 트윗 알람 전송: @%s — %s",
+                        ticker,
+                        item["username"],
+                        item["title"][:60],
+                    )
+                    time.sleep(0.5)  # Rate limit 방지
+
+    return count
+
+
 # ─── 메인 ─────────────────────────────────────────────────────────────────────
 def main() -> None:
     config = load_config()
@@ -128,10 +161,13 @@ def main() -> None:
 
     seen_news: Set[str] = load_seen(SEEN_NEWS_FILE)
     seen_sec: Set[str] = load_seen(SEEN_SEC_FILE)
+    seen_tweets: Set[str] = load_seen(SEEN_TWEETS_FILE)
 
     news_interval = config.get("check_interval_seconds", 300)
     sec_interval = config.get("sec_check_interval_seconds", 1800)
+    twitter_interval = config.get("twitter_check_interval_seconds", 600)
     monitor_sec = config.get("monitor_sec_filings", False)
+    monitor_twitter = config.get("monitor_twitter", False)
 
     # ── Discord 봇 스레드 시작 (선택적) ─────────────────────────────────────
     start_bot_thread(config)
@@ -147,6 +183,15 @@ def main() -> None:
             sec_interval,
             ", ".join(config.get("sec_form_types", ["8-K"])),
         )
+    if monitor_twitter:
+        twitter_accounts = config.get("twitter_accounts", {})
+        account_summary = ", ".join(
+            f"{t}: {', '.join('@' + u for u in accs)}"
+            for t, accs in twitter_accounts.items()
+            if t in config.get("tickers", [])
+        )
+        logger.info("트위터 모니터링: ON  (%s)", account_summary or "계정 없음")
+        logger.info("트위터 체크 주기: %d초", twitter_interval)
     logger.info("=" * 60)
 
     # ── 초기 로드 (기존 항목은 알람 없이 seen 처리) ──────────────────────────
@@ -158,6 +203,11 @@ def main() -> None:
         logger.info("기존 SEC 공시 초기 로드 중 (알람 없음)...")
         check_sec(config, seen_sec, initial=True)
         save_seen(SEEN_SEC_FILE, seen_sec)
+
+    if monitor_twitter:
+        logger.info("기존 트윗 초기 로드 중 (알람 없음)...")
+        check_tweets(config, seen_tweets, initial=True)
+        save_seen(SEEN_TWEETS_FILE, seen_tweets)
 
     logger.info("초기 로드 완료. 새 항목이 생기면 Discord로 알람을 보냅니다.")
 
@@ -175,9 +225,18 @@ def main() -> None:
         if count > 0:
             logger.info("SEC 공시 체크 완료 — 새 공시: %d건", count)
 
+    def twitter_job() -> None:
+        cfg = load_config()
+        count = check_tweets(cfg, seen_tweets)
+        save_seen(SEEN_TWEETS_FILE, seen_tweets)
+        if count > 0:
+            logger.info("트위터 체크 완료 — 새 트윗: %d건", count)
+
     schedule.every(news_interval).seconds.do(news_job)
     if monitor_sec:
         schedule.every(sec_interval).seconds.do(sec_job)
+    if monitor_twitter:
+        schedule.every(twitter_interval).seconds.do(twitter_job)
 
     # ── 메인 루프 ─────────────────────────────────────────────────────────────
     while True:

@@ -7,11 +7,20 @@ ticker_manager.py - 티커 및 설정 관리 CLI
   python ticker_manager.py remove TSLA
   python ticker_manager.py set-webhook https://discord.com/api/webhooks/...
   python ticker_manager.py set-interval 300
+
+  [트위터 관련]
+  python ticker_manager.py twitter-list
+  python ticker_manager.py twitter-add TSLA elonmusk Tesla
+  python ticker_manager.py twitter-remove TSLA elonmusk
+  python ticker_manager.py twitter-on
+  python ticker_manager.py twitter-off
 """
 import json
 import os
 import sys
 from typing import List
+
+from twitter_fetcher import KNOWN_ACCOUNTS
 
 CONFIG_FILE = "config.json"
 
@@ -22,6 +31,16 @@ DEFAULT_CONFIG = {
     "monitor_sec_filings": True,
     "sec_form_types": ["8-K"],
     "sec_check_interval_seconds": 1800,
+    "monitor_twitter": False,
+    "twitter_check_interval_seconds": 600,
+    "twitter_accounts": {},
+    "nitter_instances": [
+        "https://nitter.privacydev.net",
+        "https://nitter.poast.org",
+        "https://nitter.catsarch.com",
+        "https://nitter.unixfox.eu",
+        "https://nitter.1d4.us",
+    ],
 }
 
 
@@ -52,10 +71,17 @@ def cmd_list(config: dict) -> None:
     print(f"│  SEC 공시 모니터 : {'ON  (' + ', '.join(config.get('sec_form_types', [])) + ')' if sec else 'OFF'}")
     if sec:
         print(f"│  SEC 체크 주기   : {config.get('sec_check_interval_seconds', 1800)}초")
+    tw = config.get("monitor_twitter", False)
+    print(f"│  Twitter 모니터 : {'ON' if tw else 'OFF'}")
+    if tw:
+        print(f"│  Twitter 체크주기: {config.get('twitter_check_interval_seconds', 600)}초")
     print(f"│  등록 티커 ({len(tickers)}개) :")
     if tickers:
+        twitter_accounts = config.get("twitter_accounts", {})
         for i, t in enumerate(tickers, 1):
-            print(f"│    {i:2d}. {t}")
+            accs = twitter_accounts.get(t, [])
+            acc_str = f"  [트윗터: {', '.join('@' + a for a in accs)}]" if accs else ""
+            print(f"│    {i:2d}. {t}{acc_str}")
     else:
         print("│    (없음)")
     print("└─────────────────────────────────────────────────────┘\n")
@@ -63,6 +89,7 @@ def cmd_list(config: dict) -> None:
 
 def cmd_add(config: dict, tickers: List[str]) -> None:
     existing = set(config.setdefault("tickers", []))
+    twitter_accounts: dict = config.setdefault("twitter_accounts", {})
     added: List[str] = []
     for t in tickers:
         t = t.upper().strip()
@@ -74,7 +101,13 @@ def cmd_add(config: dict, tickers: List[str]) -> None:
             config["tickers"].append(t)
             existing.add(t)
             added.append(t)
-            print(f"  ✅ {t} — 추가됨")
+            # 알려진 계정 자동 추가 (이미 직접 설정한 경우 덮어쓰지 않음)
+            if t not in twitter_accounts and t in KNOWN_ACCOUNTS:
+                twitter_accounts[t] = KNOWN_ACCOUNTS[t]
+                accs_str = ", ".join("@" + a for a in KNOWN_ACCOUNTS[t])
+                print(f"  ✅ {t} — 추가됨  (트위터 자동: {accs_str})")
+            else:
+                print(f"  ✅ {t} — 추가됨")
     if added:
         save_config(config)
 
@@ -119,6 +152,87 @@ def cmd_set_interval(config: dict, seconds_str: str) -> None:
         sys.exit(1)
 
 
+# ─── Twitter 관리 명령어 ──────────────────────────────────────────────────────────────
+
+def cmd_twitter_list(config: dict) -> None:
+    """티커별 등록된 Twitter 계정 목록 출력."""
+    tw_on = config.get("monitor_twitter", False)
+    accounts: dict = config.get("twitter_accounts", {})
+    tickers = config.get("tickers", [])
+
+    print(f"\n트위터 모니터링: {'ON' if tw_on else 'OFF  (활성화: twitter-on)'}")
+    print("─" * 45)
+    if not accounts:
+        print("  등록된 트윗터 계정이 없습니다.")
+        print("  예) python ticker_manager.py twitter-add TSLA elonmusk Tesla")
+    else:
+        for ticker, accs in sorted(accounts.items()):
+            mark = " (티커 없음)" if ticker not in tickers else ""
+            print(f"  {ticker}{mark}:")
+            for acc in accs:
+                print(f"    @{acc}  →  https://twitter.com/{acc}")
+    print()
+
+
+def cmd_twitter_add(config: dict, ticker: str, usernames: List[str]) -> None:
+    """티커에 Twitter 계정 추가."""
+    ticker = ticker.upper().strip()
+    accounts: dict = config.setdefault("twitter_accounts", {})
+    existing: List[str] = accounts.setdefault(ticker, [])
+    added: List[str] = []
+
+    for username in usernames:
+        username = username.lstrip("@").strip()
+        if not username:
+            continue
+        if username in existing:
+            print(f"  ⚠️  @{username} — [{ticker}]에 이미 등록됨")
+        else:
+            existing.append(username)
+            added.append(username)
+            print(f"  ✅ @{username} — [{ticker}]에 추가됨")
+
+    if added:
+        save_config(config)
+
+
+def cmd_twitter_remove(config: dict, ticker: str, usernames: List[str]) -> None:
+    """티커에서 Twitter 계정 제거."""
+    ticker = ticker.upper().strip()
+    accounts: dict = config.get("twitter_accounts", {})
+    existing: List[str] = accounts.get(ticker, [])
+    removed: List[str] = []
+
+    for username in usernames:
+        username = username.lstrip("@").strip()
+        if username not in existing:
+            print(f"  ⚠️  @{username} — [{ticker}]에 없음")
+        else:
+            existing.remove(username)
+            removed.append(username)
+            print(f"  🗑️  @{username} — [{ticker}]에서 제거됨")
+
+    if removed:
+        if not existing:
+            accounts.pop(ticker, None)  # 계정이 비면 키도 제거
+        save_config(config)
+
+
+def cmd_twitter_on(config: dict) -> None:
+    config["monitor_twitter"] = True
+    save_config(config)
+    print("트위터 모니터링: ON")
+    if not config.get("twitter_accounts"):
+        print("⚠️  등록된 트윗터 계정이 없습니다.")
+        print("   예) python ticker_manager.py twitter-add TSLA elonmusk Tesla")
+
+
+def cmd_twitter_off(config: dict) -> None:
+    config["monitor_twitter"] = False
+    save_config(config)
+    print("트위터 모니터링: OFF")
+
+
 # ─── 메인 ─────────────────────────────────────────────────────────────────────
 
 def print_usage() -> None:
@@ -160,6 +274,27 @@ def main() -> None:
             print("사용법: python ticker_manager.py set-interval 300")
             sys.exit(1)
         cmd_set_interval(config, args[1])
+
+    elif command == "twitter-list":
+        cmd_twitter_list(config)
+
+    elif command == "twitter-add":
+        if len(args) < 3:
+            print("사용법: python ticker_manager.py twitter-add TICKER @account1 @account2 ...")
+            sys.exit(1)
+        cmd_twitter_add(config, args[1], args[2:])
+
+    elif command == "twitter-remove":
+        if len(args) < 3:
+            print("사용법: python ticker_manager.py twitter-remove TICKER @account1 ...")
+            sys.exit(1)
+        cmd_twitter_remove(config, args[1], args[2:])
+
+    elif command == "twitter-on":
+        cmd_twitter_on(config)
+
+    elif command == "twitter-off":
+        cmd_twitter_off(config)
 
     else:
         print(f"알 수 없는 명령어: {command}")
