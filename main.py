@@ -14,7 +14,7 @@ import schedule
 from discord_bot import start_bot_thread
 from discord_notifier import send_news_alert, send_sec_alert, send_tweet_alert
 from news_fetcher import fetch_all_news, ai_summarize_news
-from sec_fetcher import fetch_sec_filings
+from sec_fetcher import fetch_sec_filings, filter_sec_by_age
 from twitter_fetcher import fetch_all_tweets
 
 # ─── 로깅 설정 ────────────────────────────────────────────────────────────────
@@ -111,16 +111,29 @@ def check_sec(config: dict, seen: Set[str], initial: bool = False) -> int:
     webhook_url = config["discord_webhook_url"]
     tickers = config.get("tickers", [])
     form_types = config.get("sec_form_types", ["8-K"])
+    max_age_days = config.get("sec_max_age_days", 30)
+    openai_api_key = config.get("openai_api_key", "").strip()
     count = 0
 
     for ticker in tickers:
         items = fetch_sec_filings(ticker, form_types)
+        # 날짜 필터 적용 (오래된 공시 차단 — 신규 티커 추가 시 과거 폭탄 방지)
+        items = filter_sec_by_age(items, max_age_days)
         for item in items:
             item_id = item["id"]
             if not item_id or item_id in seen:
                 continue
             seen.add(item_id)
             if not initial:
+                # AI 한글 요약
+                if openai_api_key:
+                    summary_title = (
+                        f"[{ticker}] SEC {item.get('form_type','')} 공시 "
+                        f"— {item.get('description','') or item.get('form_type','')}"
+                    )
+                    item["ai_summary"] = ai_summarize_news(
+                        summary_title, "SEC EDGAR", openai_api_key
+                    )
                 if send_sec_alert(webhook_url, item):
                     count += 1
                     logger.info("[%s] SEC 공시 알람 전송: %s", ticker, item["form_type"])

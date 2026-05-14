@@ -142,7 +142,21 @@ def fetch_sec_filings(ticker: str, form_types: List[str]) -> List[Dict[str, Any]
             if len(result) >= 20:
                 break
 
+        # ── 날짜 필터: sec_max_age_days 이상 지난 공시 제외 ──────────────────
         return result
+
+
+def filter_sec_by_age(items: List[Dict[str, Any]], max_age_days: int) -> List[Dict[str, Any]]:
+    """max_age_days보다 오래된 SEC 공시를 제외합니다."""
+    if max_age_days <= 0:
+        return items
+    from datetime import date, timedelta
+    cutoff = (date.today() - timedelta(days=max_age_days)).isoformat()
+    filtered = [item for item in items if item.get("filing_date", "") >= cutoff]
+    skipped = len(items) - len(filtered)
+    if skipped > 0:
+        logger.debug("SEC 날짜 필터: %d건 제외 (%d일 이상 경과)", skipped, max_age_days)
+    return filtered
 
     except Exception as e:
         logger.error("[%s] SEC EDGAR 공시 가져오기 실패: %s", ticker, e)

@@ -158,14 +158,25 @@ def send_sec_alert(webhook_url: str, item: Dict[str, Any]) -> bool:
     description = item.get("description", "")
     link: Optional[str] = item.get("link") or None
     publish_time = item.get("publish_time", 0)
+    ai_summary: Optional[str] = item.get("ai_summary") or None
 
     color = _SEC_COLORS.get(form_type, _COLOR_DEFAULT)
 
     desc_lines = []
+    if ai_summary:
+        desc_lines.append(f"🤖 **AI 요약 (한국어)**\n{ai_summary}\n")
     if description:
         desc_lines.append(f"**내용:** {description}")
     desc_lines.append(f"**공시 양식:** {form_type}")
     desc_lines.append(f"**공시일:** {filing_date}")
+
+    fields = []
+    if link:
+        fields.append({
+            "name": "🔗 원문 링크",
+            "value": f"[SEC EDGAR 공시 보기]({link})",
+            "inline": False,
+        })
 
     embed: Dict[str, Any] = {
         "title": f"🏛️  [{ticker}]  SEC {form_type} 공시",
@@ -176,6 +187,8 @@ def send_sec_alert(webhook_url: str, item: Dict[str, Any]) -> bool:
     }
     if link:
         embed["url"] = link
+    if fields:
+        embed["fields"] = fields
 
     payload = {
         "username": "주식 뉴스 봇 📈",
