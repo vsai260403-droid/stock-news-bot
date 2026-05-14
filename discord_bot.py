@@ -299,6 +299,25 @@ def _make_bot(prefix: str):
             lines.append(f"⚠️ 등록되지 않은 계정: {', '.join('@'+a for a in not_found)}")
         await ctx.send("\n".join(lines) or "제거할 계정이 없습니다.")
 
+    # ── !set-openai-key ───────────────────────────────────────────────────────
+    @bot.command(name="set-openai-key")
+    async def cmd_set_openai_key(ctx, api_key: str = ""):
+        if not api_key:
+            await ctx.send("사용법: `!set-openai-key sk-...`\n⚠️ 이 명령어는 DM으로 보내는 것을 권장합니다.")
+            return
+        if not api_key.startswith("sk-"):
+            await ctx.send("❌ OpenAI API 키는 `sk-`로 시작해야 합니다.")
+            return
+        cfg = _load_config()
+        cfg["openai_api_key"] = api_key
+        _save_config(cfg)
+        # 키 노출 방지를 위해 메시지 삭제 시도
+        try:
+            await ctx.message.delete()
+        except Exception:
+            pass
+        await ctx.send("✅ OpenAI API 키 저장 완료! AI 한글 요약이 활성화됩니다.")
+
     # ── !status ───────────────────────────────────────────────────────────────
     @bot.command(name="status")
     async def cmd_status(ctx):
@@ -313,6 +332,8 @@ def _make_bot(prefix: str):
         twitter_accounts: dict = cfg.get("twitter_accounts", {})
 
         finnhub_str = "✅ 활성화" if finnhub_key else "❌ API 키 없음"
+        openai_key = cfg.get("openai_api_key", "").strip()
+        ai_str = "✅ 활성화" if openai_key else "❌ 키 없음 (`!set-openai-key sk-...`)"
         sec_str = f"ON ({sec_interval}초)" if monitor_sec else "OFF"
         twitter_str = "🟢 ON" if monitor_twitter else "🔴 OFF"
 
@@ -329,6 +350,7 @@ def _make_bot(prefix: str):
             f"• 뉴스 체크 주기: {news_interval}초\n"
             f"• 뉴스 소스: {', '.join(sources)}\n"
             f"• Finnhub: {finnhub_str}\n"
+            f"• AI 한글 요약: {ai_str}\n"
             f"• SEC 공시 감시: {sec_str}\n"
             f"• 트위터 알람: {twitter_str}"
         )
@@ -352,6 +374,9 @@ def _make_bot(prefix: str):
             "`!twitter-list` — 티커별 트위터 계정 목록\n"
             "`!twitter-add TSLA @elonmusk @Tesla` — 계정 추가\n"
             "`!twitter-remove TSLA @elonmusk` — 계정 제거\n"
+            "\n"
+            "**[ AI 요약 ]**\n"
+            "`!set-openai-key sk-...` — OpenAI API 키 설정 (DM 권장)\n"
             "\n"
             "`!help` — 이 도움말"
         )

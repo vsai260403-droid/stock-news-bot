@@ -7,6 +7,7 @@ ticker_manager.py - 티커 및 설정 관리 CLI
   python ticker_manager.py remove TSLA
   python ticker_manager.py set-webhook https://discord.com/api/webhooks/...
   python ticker_manager.py set-interval 300
+  python ticker_manager.py set-openai-key sk-...
 
   [트위터 관련]
   python ticker_manager.py twitter-list
@@ -125,6 +126,16 @@ def cmd_remove(config: dict, tickers: List[str]) -> None:
             print(f"  🗑️  {t} — 제거됨")
     if removed:
         save_config(config)
+
+
+def cmd_set_openai_key(config: dict, api_key: str) -> None:
+    api_key = api_key.strip()
+    if not api_key.startswith("sk-"):
+        print("⚠️  OpenAI API 키는 'sk-'로 시작해야 합니다.")
+        sys.exit(1)
+    config["openai_api_key"] = api_key
+    save_config(config)
+    print("OpenAI API 키 설정 완료! AI 한글 요약 기능이 활성화됩니다.")
 
 
 def cmd_set_webhook(config: dict, url: str) -> None:
@@ -274,6 +285,12 @@ def main() -> None:
             print("사용법: python ticker_manager.py set-interval 300")
             sys.exit(1)
         cmd_set_interval(config, args[1])
+
+    elif command == "set-openai-key":
+        if len(args) < 2:
+            print("사용법: python ticker_manager.py set-openai-key sk-...")
+            sys.exit(1)
+        cmd_set_openai_key(config, args[1])
 
     elif command == "twitter-list":
         cmd_twitter_list(config)

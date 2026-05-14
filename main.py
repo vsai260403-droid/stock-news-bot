@@ -32,6 +32,7 @@ logger = logging.getLogger(__name__)
 CONFIG_FILE = "config.json"
 SEEN_NEWS_FILE = "seen_news.json"
 SEEN_SEC_FILE = "seen_sec.json"
+SEEN_SEC_TICKERS_FILE = "seen_sec_tickers.json"  # 초기화된 SEC 티커 추적
 SEEN_TWEETS_FILE = "seen_tweets.json"
 
 
@@ -182,6 +183,7 @@ def main() -> None:
 
     seen_news: Set[str] = load_seen(SEEN_NEWS_FILE)
     seen_sec: Set[str] = load_seen(SEEN_SEC_FILE)
+    seen_sec_tickers: Set[str] = load_seen(SEEN_SEC_TICKERS_FILE)  # 초기화된 티커 집합
     seen_tweets: Set[str] = load_seen(SEEN_TWEETS_FILE)
 
     news_interval = config.get("check_interval_seconds", 300)
@@ -224,6 +226,10 @@ def main() -> None:
         logger.info("기존 SEC 공시 초기 로드 중 (알람 없음)...")
         check_sec(config, seen_sec, initial=True)
         save_seen(SEEN_SEC_FILE, seen_sec)
+        # 현재 티커들을 모두 초기화 완료로 기록
+        for t in config.get("tickers", []):
+            seen_sec_tickers.add(t.upper())
+        save_seen(SEEN_SEC_TICKERS_FILE, seen_sec_tickers)
 
     if monitor_twitter:
         logger.info("기존 트윗 초기 로드 중 (알람 없음)...")
@@ -241,6 +247,20 @@ def main() -> None:
 
     def sec_job() -> None:
         cfg = load_config()
+        # 새로 추가된 티커 감지 → 과거 공시 폭탄 방지를 위해 초기 로드 먼저 수행
+        current_tickers = {t.upper() for t in cfg.get("tickers", [])}
+        new_tickers = current_tickers - seen_sec_tickers
+        if new_tickers:
+            logger.info(
+                "새 티커 감지 — SEC 초기 로드 중 (알람 없음): %s",
+                ", ".join(sorted(new_tickers)),
+            )
+            temp_cfg = dict(cfg)
+            temp_cfg["tickers"] = list(new_tickers)
+            check_sec(temp_cfg, seen_sec, initial=True)
+            seen_sec_tickers.update(new_tickers)
+            save_seen(SEEN_SEC_TICKERS_FILE, seen_sec_tickers)
+            save_seen(SEEN_SEC_FILE, seen_sec)
         count = check_sec(cfg, seen_sec)
         save_seen(SEEN_SEC_FILE, seen_sec)
         if count > 0:
