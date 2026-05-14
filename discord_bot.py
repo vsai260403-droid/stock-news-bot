@@ -26,11 +26,30 @@ import logging
 import threading
 from typing import Optional
 
+import requests
+
 from twitter_fetcher import KNOWN_ACCOUNTS
 
 logger = logging.getLogger(__name__)
 
 CONFIG_FILE = "config.json"
+
+
+def _validate_ticker(ticker: str) -> bool:
+    """Yahoo Finance API로 티커가 실제로 존재하는지 확인합니다."""
+    try:
+        url = f"https://query1.finance.yahoo.com/v8/finance/chart/{ticker}?interval=1d&range=1d"
+        resp = requests.get(
+            url,
+            timeout=5,
+            headers={"User-Agent": "Mozilla/5.0 (compatible; StockAlarmBot/1.0)"},
+        )
+        if resp.status_code != 200:
+            return False
+        result = resp.json().get("chart", {}).get("result")
+        return bool(result)
+    except Exception:
+        return False
 
 
 def _load_config() -> dict:
@@ -82,24 +101,36 @@ def _make_bot(prefix: str):
         added, already = [], []
 
         twitter_accounts: dict = cfg.setdefault("twitter_accounts", {})
+        invalid = []
+        await ctx.send(f"🔍 티커 확인 중... ({', '.join(t.upper() for t in tickers)})")
+        import asyncio
+        loop = asyncio.get_event_loop()
         for raw in tickers:
             t = raw.upper().strip()
             if not t.isalpha() or len(t) > 10:
+                invalid.append(t)
                 continue
             if t in current_set:
                 already.append(t)
-            else:
-                cfg["tickers"].append(t)
-                current_set.add(t)
-                added.append(t)
-                # 알려진 티커면 트위터 계정 자동 등록 (기존 설정은 덮어쓰지 않음)
-                if t not in twitter_accounts and t in KNOWN_ACCOUNTS:
-                    twitter_accounts[t] = KNOWN_ACCOUNTS[t]
+                continue
+            # Yahoo Finance에서 실제 존재 여부 확인 (blocking → executor)
+            exists = await loop.run_in_executor(None, _validate_ticker, t)
+            if not exists:
+                invalid.append(t)
+                continue
+            cfg["tickers"].append(t)
+            current_set.add(t)
+            added.append(t)
+            # 알려진 티커면 트위터 계정 자동 등록 (기존 설정은 덮어쓰지 않음)
+            if t not in twitter_accounts and t in KNOWN_ACCOUNTS:
+                twitter_accounts[t] = KNOWN_ACCOUNTS[t]
 
         if added:
             _save_config(cfg)
 
         lines = []
+        for t in invalid:
+            lines.append(f"❌ **{t}** — Yahoo Finance에서 찾을 수 없는 티커")
         for t in added:
             accs = cfg.get("twitter_accounts", {}).get(t, [])
             acc_str = f"  (트위터 자동: {', '.join('@' + a for a in accs)})" if accs else ""
