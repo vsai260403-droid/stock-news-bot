@@ -13,7 +13,7 @@ import schedule
 
 from discord_bot import start_bot_thread
 from discord_notifier import send_news_alert, send_sec_alert, send_tweet_alert
-from news_fetcher import fetch_all_news
+from news_fetcher import fetch_all_news, ai_summarize_news
 from sec_fetcher import fetch_sec_filings
 from twitter_fetcher import fetch_all_tweets
 
@@ -76,6 +76,7 @@ def check_news(config: dict, seen: Set[str], initial: bool = False) -> int:
     """등록된 모든 소스에서 뉴스를 확인하고 새 항목을 Discord로 전송합니다."""
     webhook_url = config["discord_webhook_url"]
     tickers = config.get("tickers", [])
+    openai_api_key = config.get("openai_api_key", "").strip()
     count = 0
 
     for ticker in tickers:
@@ -86,6 +87,13 @@ def check_news(config: dict, seen: Set[str], initial: bool = False) -> int:
                 continue
             seen.add(item_id)
             if not initial:
+                # AI 한글 요약 (openai_api_key가 설정된 경우에만)
+                if openai_api_key:
+                    item["ai_summary"] = ai_summarize_news(
+                        item.get("title", ""),
+                        item.get("publisher", ""),
+                        openai_api_key,
+                    )
                 if send_news_alert(webhook_url, item):
                     count += 1
                     logger.info("[%s] 뉴스 알람 전송: %s", ticker, item["title"][:60])

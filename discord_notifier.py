@@ -67,19 +67,40 @@ def send_news_alert(webhook_url: str, item: Dict[str, Any]) -> bool:
     link: Optional[str] = item.get("link") or None
     publisher = item.get("publisher", "Unknown")
     publish_time = item.get("publish_time", 0)
+    ai_summary: Optional[str] = item.get("ai_summary") or None
+
+    # description: AI 요약이 있으면 표시, 없으면 기본 정보만
+    if ai_summary:
+        description = (
+            f"🤖 **AI 요약 (한국어)**\n{ai_summary}\n\n"
+            f"**출처:** {publisher}\n"
+            f"**시간:** {_fmt_local(publish_time)}"
+        )
+    else:
+        description = (
+            f"**출처:** {publisher}\n"
+            f"**시간:** {_fmt_local(publish_time)}"
+        )
+
+    fields = []
+    if link:
+        fields.append({
+            "name": "🔗 원문 링크",
+            "value": f"[기사 전문 보기]({link})",
+            "inline": False,
+        })
 
     embed: Dict[str, Any] = {
         "title": f"📰  [{ticker}]  {title}",
         "color": _COLOR_NEWS,
-        "description": (
-            f"**출처:** {publisher}\n"
-            f"**시간:** {_fmt_local(publish_time)}"
-        ),
+        "description": description,
         "footer": {"text": f"Stock News Alert  •  {ticker}"},
         "timestamp": _fmt_iso_utc(publish_time),
     }
     if link:
         embed["url"] = link
+    if fields:
+        embed["fields"] = fields
 
     payload = {
         "username": "주식 뉴스 봇 📈",

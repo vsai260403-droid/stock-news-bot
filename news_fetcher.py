@@ -2,42 +2,61 @@
 news_fetcher.py - 여러 소스에서 뉴스 수집
 
 지원 소스:
-  yahoo      - Yahoo Finance (yfinance, API 키 불필요)
+  yahoo      - Yahoo Finance RSS (feedparser, API 키 불필요)
   google_rss - Google News RSS (feedparser, API 키 불필요)
   finnhub    - Finnhub Company News (무료 API 키: https://finnhub.io/register)
 """
 import logging
 import time
 from datetime import date, timedelta
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 
 import requests
-import yfinance as yf
 
 logger = logging.getLogger(__name__)
 
 
-# ── Yahoo Finance ──────────────────────────────────────────────────────────────
+# ── Yahoo Finance RSS ──────────────────────────────────────────────────────────
 def fetch_yahoo_news(ticker: str) -> List[Dict[str, Any]]:
-    """Yahoo Finance에서 해당 티커의 최신 뉴스를 가져옵니다."""
+    """Yahoo Finance RSS 피드에서 해당 티커의 최신 뉴스를 가져옵니다.
+    
+    yfinance의 stock.news API 대신 공식 RSS 피드를 사용합니다.
+    (yfinance news API는 Yahoo 측 변경으로 인해 불안정)
+    """
     try:
-        stock = yf.Ticker(ticker)
-        raw_news = stock.news
-        if not raw_news:
+        import feedparser
+    except ImportError:
+        logger.warning("feedparser 미설치 → pip install feedparser")
+        return []
+
+    url = (
+        f"https://feeds.finance.yahoo.com/rss/2.0/headline"
+        f"?s={ticker}&region=US&lang=en-US"
+    )
+    try:
+        feed = feedparser.parse(
+            url,
+            request_headers={"User-Agent": "Mozilla/5.0 (compatible; StockAlarmBot/1.0)"},
+        )
+        if feed.bozo and not feed.entries:
+            logger.warning("[%s] Yahoo Finance RSS 파싱 실패 (bozo=True)", ticker)
             return []
 
         result = []
-        for item in raw_news:
-            # UUID를 그대로 ID로 사용 (seen_news.json 하위 호환 유지)
-            news_id = item.get("uuid") or item.get("link", "")
-            if not news_id:
+        for entry in feed.entries[:15]:
+            raw_id = entry.get("id") or entry.get("link", "")
+            if not raw_id:
                 continue
+            published = entry.get("published_parsed")
+            ts = int(time.mktime(published)) if published else 0
+            source_obj = getattr(entry, "source", None)
+            publisher = getattr(source_obj, "title", "Yahoo Finance") if source_obj else "Yahoo Finance"
             result.append({
-                "id": news_id,
-                "title": item.get("title", "(제목 없음)"),
-                "link": item.get("link", ""),
-                "publisher": item.get("publisher", "Yahoo Finance"),
-                "publish_time": item.get("providerPublishTime", 0),
+                "id": f"yahoo_rss_{raw_id}",
+                "title": entry.get("title", "(제목 없음)"),
+                "link": entry.get("link", ""),
+                "publisher": publisher,
+                "publish_time": ts,
                 "source": "Yahoo Finance",
                 "ticker": ticker.upper(),
             })
@@ -155,4 +174,56 @@ def fetch_all_news(ticker: str, config: dict) -> List[Dict[str, Any]]:
     if "finnhub" in sources and finnhub_key:
         _add(fetch_finnhub_news(ticker, finnhub_key))
 
+    # ── 시간 필터: 설정된 시간(기본 24시간)보다 오래된 뉴스 제외 ──────────────
+    max_age_hours = config.get("news_max_age_hours", 24)
+    if max_age_hours > 0:
+        cutoff_ts = int(time.time()) - (max_age_hours * 3600)
+        filtered = [item for item in all_items if item.get("publish_time", 0) >= cutoff_ts]
+        skipped = len(all_items) - len(filtered)
+        if skipped > 0:
+            logger.debug("[%s] 시간 필터: %d건 제외 (%d시간 이상 경과)", ticker, skipped, max_age_hours)
+        return filtered
+
     return all_items
+
+
+# ── AI 한글 요약 ───────────────────────────────────────────────────────────────
+def ai_summarize_news(title: str, publisher: str, openai_api_key: str) -> Optional[str]:
+    """OpenAI API로 영문 뉴스 제목을 한국어로 번역·요약합니다.
+    
+    실패 시 None 반환 (알람은 정상 전송).
+    모델: gpt-4o-mini (저비용·고속)
+    """
+    if not openai_api_key:
+        return None
+    try:
+        from openai import OpenAI
+    except ImportError:
+        logger.warning("openai 패키지 미설치 → pip install openai  (AI 요약 비활성화)")
+        return None
+    try:
+        client = OpenAI(api_key=openai_api_key)
+        response = client.chat.completions.create(
+            model="gpt-4o-mini",
+            messages=[
+                {
+                    "role": "system",
+                    "content": (
+                        "당신은 주식 투자자를 위한 뉴스 번역·요약 도우미입니다. "
+                        "영어 뉴스 제목과 출처를 받으면, "
+                        "한국어로 자연스럽게 번역하고 투자자에게 중요한 핵심 내용을 "
+                        "1~2문장으로 간결하게 설명해 주세요."
+                    ),
+                },
+                {
+                    "role": "user",
+                    "content": f"출처: {publisher}\n제목: {title}",
+                },
+            ],
+            max_tokens=200,
+            temperature=0.3,
+        )
+        return response.choices[0].message.content.strip()
+    except Exception as e:
+        logger.warning("AI 요약 실패: %s", e)
+        return None
