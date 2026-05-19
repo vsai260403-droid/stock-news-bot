@@ -173,6 +173,9 @@ def cmd_add(config: dict, tickers: List[str]) -> None:
 def cmd_remove(config: dict, tickers: List[str]) -> None:
     existing: List[str] = config.setdefault("tickers", [])
     twitter_accounts: dict = config.get("twitter_accounts", {})
+    print(f"[DEBUG] 삭제 전 tickers: {existing}")
+    print(f"[DEBUG] 삭제 전 twitter_accounts keys: {list(twitter_accounts.keys())}")
+    print(f"[DEBUG] twitter_accounts id: {id(twitter_accounts)}, config['twitter_accounts'] id: {id(config.get('twitter_accounts', {}))}")
     removed: List[str] = []
     for t in tickers:
         t = t.upper().strip()
@@ -181,10 +184,13 @@ def cmd_remove(config: dict, tickers: List[str]) -> None:
         else:
             existing.remove(t)
             # 트위터 계정도 같이 삭제
+            print(f"[DEBUG] '{t}' in twitter_accounts: {t in twitter_accounts}")
             if t in twitter_accounts:
                 del twitter_accounts[t]
+                print(f"[DEBUG] 삭제 후 twitter_accounts keys: {list(twitter_accounts.keys())}")
             removed.append(t)
             print(f"  🗑️  {t} — 제거됨 (트위터 계정도 삭제)")
+    print(f"[DEBUG] 최종 config['twitter_accounts']: {config.get('twitter_accounts', {})}")
     if removed:
         save_config(config)
 
