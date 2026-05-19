@@ -17,11 +17,44 @@ ticker_manager.py - 티커 및 설정 관리 CLI
   python ticker_manager.py twitter-off
 """
 import json
+import logging
 import os
 import sys
-from typing import List
+from typing import List, Optional
 
 from twitter_fetcher import KNOWN_ACCOUNTS
+
+logger = logging.getLogger(__name__)
+
+
+def _gemini_find_twitter_accounts(ticker: str, gemini_api_key: str) -> Optional[List[str]]:
+    """Gemini에게 티커의 공식 트위터 계정을 물어봅니다.
+    
+    반환: 계정명 리스트 (예: ['nvidia', 'JensenHuang']) 또는 None(실패 시)
+    """
+    try:
+        import google.generativeai as genai
+    except ImportError:
+        return None
+    try:
+        genai.configure(api_key=gemini_api_key)
+        model = genai.GenerativeModel("gemini-2.0-flash")
+        prompt = (
+            f"주식 티커 '{ticker}'의 공식 트위터(X) 계정 사용자명(username)을 알려주세요.\n"
+            "회사 공식 계정과 주요 임원 계정을 포함해서 최대 3개까지만 알려주세요.\n"
+            "반드시 아래 형식으로만 답하세요 (설명 없이 콤마로 구분된 username만)::\n"
+            "username1,username2,username3\n\n"
+            "존재하지 않거나 모르면 NONE 이라고만 답하세요."
+        )
+        response = model.generate_content(prompt)
+        text = response.text.strip()
+        if text.upper() == "NONE" or not text:
+            return None
+        accounts = [a.strip().lstrip("@") for a in text.split(",") if a.strip()]
+        return accounts if accounts else None
+    except Exception as e:
+        logger.warning("Gemini 트위터 계정 탐색 실패 [%s]: %s", ticker, e)
+        return None
 
 CONFIG_FILE = "config.json"
 
@@ -91,6 +124,7 @@ def cmd_list(config: dict) -> None:
 def cmd_add(config: dict, tickers: List[str]) -> None:
     existing = set(config.setdefault("tickers", []))
     twitter_accounts: dict = config.setdefault("twitter_accounts", {})
+    gemini_api_key = config.get("gemini_api_key", "").strip()
     added: List[str] = []
     for t in tickers:
         t = t.upper().strip()
@@ -98,17 +132,34 @@ def cmd_add(config: dict, tickers: List[str]) -> None:
             continue
         if t in existing:
             print(f"  ⚠️  {t} — 이미 등록됨")
-        else:
-            config["tickers"].append(t)
-            existing.add(t)
-            added.append(t)
-            # 알려진 계정 자동 추가 (이미 직접 설정한 경우 덮어쓰지 않음)
-            if t not in twitter_accounts and t in KNOWN_ACCOUNTS:
-                twitter_accounts[t] = KNOWN_ACCOUNTS[t]
-                accs_str = ", ".join("@" + a for a in KNOWN_ACCOUNTS[t])
-                print(f"  ✅ {t} — 추가됨  (트위터 자동: {accs_str})")
+            continue
+        config["tickers"].append(t)
+        existing.add(t)
+        added.append(t)
+
+        # 트위터 계정 자동 설정 (이미 직접 설정한 경우 덮어쓰지 않음)
+        if t in twitter_accounts:
+            print(f"  ✅ {t} — 추가됨")
+            continue
+
+        # 1순위: KNOWN_ACCOUNTS 하드코딩
+        if t in KNOWN_ACCOUNTS:
+            twitter_accounts[t] = KNOWN_ACCOUNTS[t]
+            accs_str = ", ".join("@" + a for a in KNOWN_ACCOUNTS[t])
+            print(f"  ✅ {t} — 추가됨  (트위터 자동: {accs_str})")
+        # 2순위: Gemini로 탐색
+        elif gemini_api_key:
+            print(f"  ✅ {t} — 추가됨  (Gemini로 트위터 계정 탐색 중...)")
+            accounts = _gemini_find_twitter_accounts(t, gemini_api_key)
+            if accounts:
+                twitter_accounts[t] = accounts
+                accs_str = ", ".join("@" + a for a in accounts)
+                print(f"       Gemini 탐색 완료: {accs_str}")
             else:
-                print(f"  ✅ {t} — 추가됨")
+                print(f"       Gemini 탐색 결과 없음 — 수동 등록: python ticker_manager.py twitter-add {t} @account")
+        else:
+            print(f"  ✅ {t} — 추가됨  (트위터 계정 미등록)")
+
     if added:
         save_config(config)
 
@@ -128,14 +179,14 @@ def cmd_remove(config: dict, tickers: List[str]) -> None:
         save_config(config)
 
 
-def cmd_set_openai_key(config: dict, api_key: str) -> None:
+def cmd_set_gemini_key(config: dict, api_key: str) -> None:
     api_key = api_key.strip()
-    if not api_key.startswith("sk-"):
-        print("⚠️  OpenAI API 키는 'sk-'로 시작해야 합니다.")
+    if not api_key:
+        print("⚠️  API 키가 비어있습니다.")
         sys.exit(1)
-    config["openai_api_key"] = api_key
+    config["gemini_api_key"] = api_key
     save_config(config)
-    print("OpenAI API 키 설정 완료! AI 한글 요약 기능이 활성화됩니다.")
+    print("Gemini API 키 설정 완료! AI 한글 요약 및 트위터 계정 자동 탐색 기능이 활성화됩니다.")
 
 
 def cmd_set_webhook(config: dict, url: str) -> None:
@@ -286,11 +337,11 @@ def main() -> None:
             sys.exit(1)
         cmd_set_interval(config, args[1])
 
-    elif command == "set-openai-key":
+    elif command == "set-gemini-key":
         if len(args) < 2:
-            print("사용법: python ticker_manager.py set-openai-key sk-...")
+            print("사용법: python ticker_manager.py set-gemini-key AIza...")
             sys.exit(1)
-        cmd_set_openai_key(config, args[1])
+        cmd_set_gemini_key(config, args[1])
 
     elif command == "twitter-list":
         cmd_twitter_list(config)
