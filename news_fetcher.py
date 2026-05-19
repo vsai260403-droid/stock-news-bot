@@ -158,13 +158,23 @@ def fetch_all_news(ticker: str, config: dict) -> List[Dict[str, Any]]:
     finnhub_key = config.get("finnhub_api_key", "").strip()
 
     seen_ids: set = set()
+    seen_title_hashes: set = set()
     all_items: List[Dict[str, Any]] = []
+
+    def _title_hash(title: str) -> str:
+        import hashlib
+        return hashlib.md5(title.lower().strip().encode("utf-8")).hexdigest()[:16]
 
     def _add(items: List[Dict[str, Any]]) -> None:
         for item in items:
-            if item["id"] and item["id"] not in seen_ids:
-                seen_ids.add(item["id"])
-                all_items.append(item)
+            if not item["id"]:
+                continue
+            th = _title_hash(item.get("title", ""))
+            if item["id"] in seen_ids or th in seen_title_hashes:
+                continue
+            seen_ids.add(item["id"])
+            seen_title_hashes.add(th)
+            all_items.append(item)
 
     if "yahoo" in sources:
         _add(fetch_yahoo_news(ticker))
