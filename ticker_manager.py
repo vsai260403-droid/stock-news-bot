@@ -50,7 +50,7 @@ def _gemini_find_twitter_accounts(ticker: str, gemini_api_key: str) -> Optional[
             "존재하지 않거나 모르면 NONE 이라고만 답하세요."
         )
         response = client.chat.completions.create(
-            model="gemini-2.0-flash",
+            model="gemini-2.5-flash",
             messages=[{"role": "user", "content": prompt}],
         )
         text = response.choices[0].message.content.strip()

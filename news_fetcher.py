@@ -217,7 +217,7 @@ def ai_summarize_news(title: str, publisher: str, gemini_api_key: str) -> Option
             f"출처: {publisher}\n제목: {title}"
         )
         response = client.chat.completions.create(
-            model="gemini-2.0-flash",
+            model="gemini-2.5-flash",
             messages=[{"role": "user", "content": prompt}],
         )
         return response.choices[0].message.content.strip()
