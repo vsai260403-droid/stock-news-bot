@@ -45,7 +45,7 @@ def _gemini_find_twitter_accounts(ticker: str, gemini_api_key: str) -> Optional[
         prompt = (
             f"주식 티커 '{ticker}'의 공식 트위터(X) 계정 사용자명(username)을 알려주세요.\n"
             "회사 공식 계정과 주요 임원 계정을 포함해서 최대 3개까지만 알려주세요.\n"
-            "반드시 아래 형식으로만 답하세요 (설명 없이 콤마로 구분된 username만)::\n"
+            "반드시 아래 형식으로만 답하세요 (설명 없이 콤마로 구분된 username만):\n"
             "username1,username2,username3\n\n"
             "존재하지 않거나 모르면 NONE 이라고만 답하세요."
         )
@@ -172,6 +172,7 @@ def cmd_add(config: dict, tickers: List[str]) -> None:
 
 def cmd_remove(config: dict, tickers: List[str]) -> None:
     existing: List[str] = config.setdefault("tickers", [])
+    twitter_accounts: dict = config.get("twitter_accounts", {})
     removed: List[str] = []
     for t in tickers:
         t = t.upper().strip()
@@ -179,8 +180,11 @@ def cmd_remove(config: dict, tickers: List[str]) -> None:
             print(f"  ⚠️  {t} — 등록되지 않음")
         else:
             existing.remove(t)
+            # 트위터 계정도 같이 삭제
+            if t in twitter_accounts:
+                del twitter_accounts[t]
             removed.append(t)
-            print(f"  🗑️  {t} — 제거됨")
+            print(f"  🗑️  {t} — 제거됨 (트위터 계정도 삭제)")
     if removed:
         save_config(config)
 
