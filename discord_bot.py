@@ -9,8 +9,8 @@ discord_bot.py - Discord Bot을 통한 티커 관리 명령어
   5. config.json 의 discord_bot_token 에 Bot Token 입력
 
 【명령어】
-  !add AAPL MSFT      — 티커 추가 (알려진 티커는 트위터 계정 자동 등록)
-  !remove TSLA        — 티커 제거
+  !add AAPL MSFT      — 티커 추가 (Gemini로 트위터 계정 자동 탐색)
+  !remove TSLA        — 티커 제거 (트위터 계정도 삭제)
   !list               — 등록된 티커 목록
   !status             — 시스템 상태
   !help               — 도움말
@@ -20,6 +20,11 @@ discord_bot.py - Discord Bot을 통한 티커 관리 명령어
   !twitter-list       — 티커별 등록 트위터 계정 확인
   !twitter-add TSLA @elonmusk @Tesla  — 계정 추가
   !twitter-remove TSLA @elonmusk      — 계정 제거
+
+  !set-gemini-key AIza...  — Gemini API 키 (트위터 자동 탐색)
+  !set-openai-key sk-...   — OpenAI API 키 (AI 요약)
+  !set-interval 300        — 뉴스 체크 주기 (초)
+  !set-webhook URL         — Discord Webhook URL
 """
 import json
 import logging
@@ -29,6 +34,7 @@ from typing import Optional
 import requests
 
 from twitter_fetcher import KNOWN_ACCOUNTS
+from ticker_manager import _gemini_find_twitter_accounts
 
 logger = logging.getLogger(__name__)
 
@@ -121,9 +127,20 @@ def _make_bot(prefix: str):
             cfg["tickers"].append(t)
             current_set.add(t)
             added.append(t)
-            # 알려진 티커면 트위터 계정 자동 등록 (기존 설정은 덮어쓰지 않음)
-            if t not in twitter_accounts and t in KNOWN_ACCOUNTS:
-                twitter_accounts[t] = KNOWN_ACCOUNTS[t]
+            # 트위터 계정 자동 등록 (기존 설정은 덮어쓰지 않음)
+            if t not in twitter_accounts:
+                if t in KNOWN_ACCOUNTS:
+                    twitter_accounts[t] = KNOWN_ACCOUNTS[t]
+                else:
+                    # Gemini로 트위터 계정 탐색
+                    gemini_key = cfg.get("gemini_api_key", "").strip()
+                    if gemini_key:
+                        await ctx.send(f"🔎 **{t}** Gemini로 트위터 계정 탐색 중...")
+                        accounts = await loop.run_in_executor(
+                            None, _gemini_find_twitter_accounts, t, gemini_key
+                        )
+                        if accounts:
+                            twitter_accounts[t] = accounts
 
         if added:
             _save_config(cfg)
@@ -133,7 +150,7 @@ def _make_bot(prefix: str):
             lines.append(f"❌ **{t}** — Yahoo Finance에서 찾을 수 없는 티커")
         for t in added:
             accs = cfg.get("twitter_accounts", {}).get(t, [])
-            acc_str = f"  (트위터 자동: {', '.join('@' + a for a in accs)})" if accs else ""
+            acc_str = f"  (트위터: {', '.join('@' + a for a in accs)})" if accs else "  (트위터 계정 없음 — `!twitter-add {t} @계정`으로 수동 등록)".format(t=t)
             lines.append(f"✅ **{t}** 추가됨{acc_str}")
         for t in already:
             lines.append(f"⚠️ **{t}** 이미 등록됨")
@@ -322,6 +339,58 @@ def _make_bot(prefix: str):
             pass
         await ctx.send("✅ OpenAI API 키 저장 완료! AI 한글 요약이 활성화됩니다.")
 
+    # ── !set-gemini-key ───────────────────────────────────────────────────────
+    @bot.command(name="set-gemini-key")
+    async def cmd_set_gemini_key(ctx, api_key: str = ""):
+        if not api_key:
+            await ctx.send("사용법: `!set-gemini-key AIza...`\n⚠️ 이 명령어는 DM으로 보내는 것을 권장합니다.")
+            return
+        cfg = _load_config()
+        cfg["gemini_api_key"] = api_key
+        _save_config(cfg)
+        try:
+            await ctx.message.delete()
+        except Exception:
+            pass
+        await ctx.send("✅ Gemini API 키 저장 완료! 트위터 계정 자동 탐색이 활성화됩니다.")
+
+    # ── !set-interval ─────────────────────────────────────────────────────────
+    @bot.command(name="set-interval")
+    async def cmd_set_interval(ctx, seconds: str = ""):
+        if not seconds:
+            await ctx.send("사용법: `!set-interval 300` (초 단위)")
+            return
+        try:
+            val = int(seconds)
+            if val < 60:
+                await ctx.send("❌ 최소 60초 이상이어야 합니다.")
+                return
+        except ValueError:
+            await ctx.send("❌ 숫자를 입력하세요.")
+            return
+        cfg = _load_config()
+        cfg["check_interval_seconds"] = val
+        _save_config(cfg)
+        await ctx.send(f"✅ 뉴스 체크 주기: **{val}초**로 변경됨")
+
+    # ── !set-webhook ──────────────────────────────────────────────────────────
+    @bot.command(name="set-webhook")
+    async def cmd_set_webhook(ctx, url: str = ""):
+        if not url:
+            await ctx.send("사용법: `!set-webhook https://discord.com/api/webhooks/...`")
+            return
+        if not url.startswith("https://discord.com/api/webhooks/"):
+            await ctx.send("❌ Discord Webhook URL 형식이 올바르지 않습니다.")
+            return
+        cfg = _load_config()
+        cfg["discord_webhook_url"] = url
+        _save_config(cfg)
+        try:
+            await ctx.message.delete()
+        except Exception:
+            pass
+        await ctx.send("✅ Discord Webhook URL 저장 완료!")
+
     # ── !status ───────────────────────────────────────────────────────────────
     @bot.command(name="status")
     async def cmd_status(ctx):
@@ -338,6 +407,8 @@ def _make_bot(prefix: str):
         finnhub_str = "✅ 활성화" if finnhub_key else "❌ API 키 없음"
         openai_key = cfg.get("openai_api_key", "").strip()
         ai_str = "✅ 활성화" if openai_key else "❌ 키 없음 (`!set-openai-key sk-...`)"
+        gemini_key = cfg.get("gemini_api_key", "").strip()
+        gemini_str = "✅ 활성화" if gemini_key else "❌ 키 없음 (`!set-gemini-key`)"
         sec_str = f"ON ({sec_interval}초)" if monitor_sec else "OFF"
         twitter_str = "🟢 ON" if monitor_twitter else "🔴 OFF"
 
@@ -355,6 +426,7 @@ def _make_bot(prefix: str):
             f"• 뉴스 소스: {', '.join(sources)}\n"
             f"• Finnhub: {finnhub_str}\n"
             f"• AI 한글 요약: {ai_str}\n"
+            f"• 트위터 자동 탐색 (Gemini): {gemini_str}\n"
             f"• SEC 공시 감시: {sec_str}\n"
             f"• 트위터 알람: {twitter_str}"
         )
@@ -367,7 +439,7 @@ def _make_bot(prefix: str):
             "**📈 주식 알람 봇 명령어**\n"
             "\n"
             "**[ 티커 관리 ]**\n"
-            "`!add AAPL TSLA` — 티커 추가 (알려진 티커는 트위터 자동 등록)\n"
+            "`!add AAPL TSLA` — 티커 추가 (트위터 계정 자동 탐색)\n"
             "`!remove TSLA` — 티커 제거\n"
             "`!list` — 등록된 티커 목록\n"
             "`!status` — 시스템 상태 확인\n"
@@ -379,8 +451,11 @@ def _make_bot(prefix: str):
             "`!twitter-add TSLA @elonmusk @Tesla` — 계정 추가\n"
             "`!twitter-remove TSLA @elonmusk` — 계정 제거\n"
             "\n"
-            "**[ AI 요약 ]**\n"
-            "`!set-openai-key sk-...` — OpenAI API 키 설정 (DM 권장)\n"
+            "**[ 설정 ]**\n"
+            "`!set-gemini-key AIza...` — Gemini API 키 (트위터 자동 탐색용, DM 권장)\n"
+            "`!set-openai-key sk-...` — OpenAI API 키 (AI 요약용, DM 권장)\n"
+            "`!set-interval 300` — 뉴스 체크 주기 (초)\n"
+            "`!set-webhook URL` — Discord Webhook URL (DM 권장)\n"
             "\n"
             "`!help` — 이 도움말"
         )
