@@ -92,10 +92,8 @@ start() {
 
     # main.py 백그라운드 실행
     nohup "$PYTHON" main.py >> "$LOG_DIR/main.log" 2>&1 &
-    BGPID=$!
-    disown $BGPID
-    echo $BGPID > "$PID_FILE"
-    echo "Stock Alarm Bot 시작 (PID: $BGPID)"
+    echo $! > "$PID_FILE"
+    echo "Stock Alarm Bot 시작 (PID: $!)"
     echo ""
     echo "완료! 로그 확인: bash run.sh logs"
     echo "실시간 로그:     tail -f $LOG_DIR/main.log"
