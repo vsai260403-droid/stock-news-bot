@@ -148,12 +148,16 @@ def _make_bot(prefix: str):
 
         cfg = _load_config()
         current: list = cfg.get("tickers", [])
+        twitter_accounts: dict = cfg.get("twitter_accounts", {})
         removed, not_found = [], []
 
         for raw in tickers:
             t = raw.upper().strip()
             if t in current:
                 current.remove(t)
+                # 트위터 계정도 같이 삭제
+                if t in twitter_accounts:
+                    del twitter_accounts[t]
                 removed.append(t)
             else:
                 not_found.append(t)
