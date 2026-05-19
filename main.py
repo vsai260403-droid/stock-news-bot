@@ -6,6 +6,7 @@ main.py - 주식 뉴스 Discord 알람 메인 실행 파일
 import json
 import logging
 import os
+import hashlib
 import time
 from typing import Set
 
@@ -53,6 +54,10 @@ def save_seen(filepath: str, seen: Set[str]) -> None:
     with open(filepath, "w", encoding="utf-8") as f:
         json.dump(sorted(seen), f, indent=2)
 
+def _title_hash(title: str) -> str:
+    """뉴스 제목의 해시 키를 반환합니다 (ID가 바뀌어도 동일 기사 중복 전송 방지)."""
+    normalized = title.lower().strip()
+    return "title_" + hashlib.md5(normalized.encode("utf-8")).hexdigest()[:16]
 
 def _validate_config(config: dict) -> bool:
     """필수 설정값 검증."""
@@ -77,23 +82,30 @@ def check_news(config: dict, seen: Set[str], initial: bool = False) -> int:
     """등록된 모든 소스에서 뉴스를 확인하고 새 항목을 Discord로 전송합니다."""
     webhook_url = config["discord_webhook_url"]
     tickers = config.get("tickers", [])
-    openai_api_key = config.get("openai_api_key", "").strip()
+    gemini_api_key = config.get("gemini_api_key", "").strip()
     count = 0
 
     for ticker in tickers:
         items = fetch_all_news(ticker, config)
         for item in items:
             item_id = item["id"]
-            if not item_id or item_id in seen:
+            title_hash = _title_hash(item.get("title", ""))
+            # ID 또는 제목 해시로 중복 체크 (RSS ID가 바뀌어도 동일 기사 재전송 방지)
+            if not item_id:
                 continue
+            already_seen = item_id in seen or title_hash in seen
+            # ID와 title_hash 모두 등록 (RSS가 ID를 재생성해도 같은 기사 재전송 방지)
             seen.add(item_id)
+            seen.add(title_hash)
+            if already_seen:
+                continue
             if not initial:
-                # AI 한글 요약 (openai_api_key가 설정된 경우에만)
-                if openai_api_key:
+                # AI 한글 요약 (gemini_api_key가 설정된 경우에만)
+                if gemini_api_key:
                     item["ai_summary"] = ai_summarize_news(
                         item.get("title", ""),
                         item.get("publisher", ""),
-                        openai_api_key,
+                        gemini_api_key,
                     )
                 if send_news_alert(webhook_url, item):
                     count += 1
@@ -113,7 +125,7 @@ def check_sec(config: dict, seen: Set[str], initial: bool = False) -> int:
     tickers = config.get("tickers", [])
     form_types = config.get("sec_form_types", ["8-K"])
     max_age_days = config.get("sec_max_age_days", 30)
-    openai_api_key = config.get("openai_api_key", "").strip()
+    gemini_api_key = config.get("gemini_api_key", "").strip()
     count = 0
 
     for ticker in tickers:
@@ -127,13 +139,13 @@ def check_sec(config: dict, seen: Set[str], initial: bool = False) -> int:
             seen.add(item_id)
             if not initial:
                 # AI 한글 요약
-                if openai_api_key:
+                if gemini_api_key:
                     summary_title = (
                         f"[{ticker}] SEC {item.get('form_type','')} 공시 "
                         f"— {item.get('description','') or item.get('form_type','')}"
                     )
                     item["ai_summary"] = ai_summarize_news(
-                        summary_title, "SEC EDGAR", openai_api_key
+                        summary_title, "SEC EDGAR", gemini_api_key
                     )
                 if send_sec_alert(webhook_url, item):
                     count += 1

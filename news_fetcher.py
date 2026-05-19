@@ -6,6 +6,7 @@ news_fetcher.py - 여러 소스에서 뉴스 수집
   google_rss - Google News RSS (feedparser, API 키 불필요)
   finnhub    - Finnhub Company News (무료 API 키: https://finnhub.io/register)
 """
+import calendar
 import logging
 import time
 from datetime import date, timedelta
@@ -48,7 +49,7 @@ def fetch_yahoo_news(ticker: str) -> List[Dict[str, Any]]:
             if not raw_id:
                 continue
             published = entry.get("published_parsed")
-            ts = int(time.mktime(published)) if published else 0
+            ts = int(calendar.timegm(published)) if published else 0
             source_obj = getattr(entry, "source", None)
             publisher = getattr(source_obj, "title", "Yahoo Finance") if source_obj else "Yahoo Finance"
             result.append({
@@ -89,7 +90,7 @@ def fetch_google_news_rss(ticker: str) -> List[Dict[str, Any]]:
             source_obj = getattr(entry, "source", None)
             publisher = getattr(source_obj, "title", "Google News")
             published = entry.get("published_parsed")
-            ts = int(time.mktime(published)) if published else 0
+            ts = int(calendar.timegm(published)) if published else 0
             result.append({
                 "id": f"gnews_{raw_id}",
                 "title": entry.get("title", "(제목 없음)"),
@@ -188,42 +189,33 @@ def fetch_all_news(ticker: str, config: dict) -> List[Dict[str, Any]]:
 
 
 # ── AI 한글 요약 ───────────────────────────────────────────────────────────────
-def ai_summarize_news(title: str, publisher: str, openai_api_key: str) -> Optional[str]:
-    """OpenAI API로 영문 뉴스 제목을 한국어로 번역·요약합니다.
-    
+def ai_summarize_news(title: str, publisher: str, gemini_api_key: str) -> Optional[str]:
+    """Google Gemini API로 영문 뉴스 제목을 한국어로 번역·요약합니다.
+
     실패 시 None 반환 (알람은 정상 전송).
-    모델: gpt-4o-mini (저비용·고속)
+    모델: gemini-1.5-flash (저비용·고속)
     """
-    if not openai_api_key:
+    if not gemini_api_key:
         return None
     try:
-        from openai import OpenAI
+        import google.generativeai as genai
     except ImportError:
-        logger.warning("openai 패키지 미설치 → pip install openai  (AI 요약 비활성화)")
+        logger.warning(
+            "google-generativeai 패키지 미설치 → pip install google-generativeai  (AI 요약 비활성화)"
+        )
         return None
     try:
-        client = OpenAI(api_key=openai_api_key)
-        response = client.chat.completions.create(
-            model="gpt-4o-mini",
-            messages=[
-                {
-                    "role": "system",
-                    "content": (
-                        "당신은 주식 투자자를 위한 뉴스 번역·요약 도우미입니다. "
-                        "영어 뉴스 제목과 출처를 받으면, "
-                        "한국어로 자연스럽게 번역하고 투자자에게 중요한 핵심 내용을 "
-                        "1~2문장으로 간결하게 설명해 주세요."
-                    ),
-                },
-                {
-                    "role": "user",
-                    "content": f"출처: {publisher}\n제목: {title}",
-                },
-            ],
-            max_tokens=200,
-            temperature=0.3,
+        genai.configure(api_key=gemini_api_key)
+        model = genai.GenerativeModel("gemini-2.0-flash")
+        prompt = (
+            "당신은 주식 투자자를 위한 뉴스 번역·요약 도우미입니다. "
+            "영어 뉴스 제목과 출처를 받으면, "
+            "한국어로 자연스럽게 번역하고 투자자에게 중요한 핵심 내용을 "
+            "1~2문장으로 간결하게 설명해 주세요.\n\n"
+            f"출처: {publisher}\n제목: {title}"
         )
-        return response.choices[0].message.content.strip()
+        response = model.generate_content(prompt)
+        return response.text.strip()
     except Exception as e:
         logger.warning("AI 요약 실패: %s", e)
         return None
