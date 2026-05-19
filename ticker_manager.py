@@ -36,6 +36,7 @@ def _gemini_find_twitter_accounts(ticker: str, gemini_api_key: str) -> Optional[
     try:
         from openai import OpenAI
     except ImportError:
+        logger.warning("Gemini 트위터 탐색 실패: openai 라이브러리 미설치")
         return None
     try:
         client = OpenAI(
@@ -44,19 +45,23 @@ def _gemini_find_twitter_accounts(ticker: str, gemini_api_key: str) -> Optional[
         )
         prompt = (
             f"주식 티커 '{ticker}'의 공식 트위터(X) 계정 사용자명(username)을 알려주세요.\n"
-            "회사 공식 계정과 주요 임원 계정을 포함해서 최대 3개까지만 알려주세요.\n"
+            "회사 공식 계정과 CEO/창립자/주요 임원의 개인 계정을 포함해서 최대 3개까지만 알려주세요.\n"
             "반드시 아래 형식으로만 답하세요 (설명 없이 콤마로 구분된 username만):\n"
             "username1,username2,username3\n\n"
             "존재하지 않거나 모르면 NONE 이라고만 답하세요."
         )
+        logger.info("[Gemini] %s 트위터 계정 탐색 요청", ticker)
         response = client.chat.completions.create(
             model="gemini-2.5-flash",
             messages=[{"role": "user", "content": prompt}],
         )
         text = response.choices[0].message.content.strip()
+        logger.info("[Gemini] %s 응답: %s", ticker, text)
         if text.upper() == "NONE" or not text:
+            logger.info("[Gemini] %s 트위터 계정 없음 (NONE 응답)", ticker)
             return None
         accounts = [a.strip().lstrip("@") for a in text.split(",") if a.strip()]
+        logger.info("[Gemini] %s 파싱 결과: %s", ticker, accounts)
         return accounts if accounts else None
     except Exception as e:
         logger.warning("Gemini 트위터 계정 탐색 실패 [%s]: %s", ticker, e)
