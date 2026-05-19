@@ -193,20 +193,22 @@ def ai_summarize_news(title: str, publisher: str, gemini_api_key: str) -> Option
     """Google Gemini API로 영문 뉴스 제목을 한국어로 번역·요약합니다.
 
     실패 시 None 반환 (알람은 정상 전송).
-    모델: gemini-1.5-flash (저비용·고속)
+    OpenAI 호환 API 사용 (grpcio 의존성 없음, 라즈베리파이 호환).
     """
     if not gemini_api_key:
         return None
     try:
-        import google.generativeai as genai
+        from openai import OpenAI
     except ImportError:
         logger.warning(
-            "google-generativeai 패키지 미설치 → pip install google-generativeai  (AI 요약 비활성화)"
+            "openai 패키지 미설치 → pip install openai  (AI 요약 비활성화)"
         )
         return None
     try:
-        genai.configure(api_key=gemini_api_key)
-        model = genai.GenerativeModel("gemini-2.0-flash")
+        client = OpenAI(
+            api_key=gemini_api_key,
+            base_url="https://generativelanguage.googleapis.com/v1beta/openai/",
+        )
         prompt = (
             "당신은 주식 투자자를 위한 뉴스 번역·요약 도우미입니다. "
             "영어 뉴스 제목과 출처를 받으면, "
@@ -214,8 +216,11 @@ def ai_summarize_news(title: str, publisher: str, gemini_api_key: str) -> Option
             "1~2문장으로 간결하게 설명해 주세요.\n\n"
             f"출처: {publisher}\n제목: {title}"
         )
-        response = model.generate_content(prompt)
-        return response.text.strip()
+        response = client.chat.completions.create(
+            model="gemini-2.0-flash",
+            messages=[{"role": "user", "content": prompt}],
+        )
+        return response.choices[0].message.content.strip()
     except Exception as e:
         logger.warning("AI 요약 실패: %s", e)
         return None

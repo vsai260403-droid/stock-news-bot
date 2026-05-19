@@ -31,14 +31,17 @@ def _gemini_find_twitter_accounts(ticker: str, gemini_api_key: str) -> Optional[
     """Gemini에게 티커의 공식 트위터 계정을 물어봅니다.
     
     반환: 계정명 리스트 (예: ['nvidia', 'JensenHuang']) 또는 None(실패 시)
+    OpenAI 호환 API 사용 (grpcio 의존성 없음, 라즈베리파이 호환).
     """
     try:
-        import google.generativeai as genai
+        from openai import OpenAI
     except ImportError:
         return None
     try:
-        genai.configure(api_key=gemini_api_key)
-        model = genai.GenerativeModel("gemini-2.0-flash")
+        client = OpenAI(
+            api_key=gemini_api_key,
+            base_url="https://generativelanguage.googleapis.com/v1beta/openai/",
+        )
         prompt = (
             f"주식 티커 '{ticker}'의 공식 트위터(X) 계정 사용자명(username)을 알려주세요.\n"
             "회사 공식 계정과 주요 임원 계정을 포함해서 최대 3개까지만 알려주세요.\n"
@@ -46,8 +49,11 @@ def _gemini_find_twitter_accounts(ticker: str, gemini_api_key: str) -> Optional[
             "username1,username2,username3\n\n"
             "존재하지 않거나 모르면 NONE 이라고만 답하세요."
         )
-        response = model.generate_content(prompt)
-        text = response.text.strip()
+        response = client.chat.completions.create(
+            model="gemini-2.0-flash",
+            messages=[{"role": "user", "content": prompt}],
+        )
+        text = response.choices[0].message.content.strip()
         if text.upper() == "NONE" or not text:
             return None
         accounts = [a.strip().lstrip("@") for a in text.split(",") if a.strip()]
