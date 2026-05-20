@@ -197,6 +197,30 @@ def send_sec_alert(webhook_url: str, item: Dict[str, Any]) -> bool:
     return _post(webhook_url, payload)
 
 
+_UP_COMMENTS: Dict[int, list] = {
+    1: ["슬슬 움직이네요 👀", "오, 뭔가 시작되는 냄새? 🤔", "관심 가져볼 만하네요!", "살짝 달아오르는 중 🌡️"],
+    2: ["이거 심상치 않은데요?! 🔥", "제법 달리는데요!", "눈여겨봐야겠는걸요? 😮", "누가 사고 있는 거죠? 🧐"],
+    3: ["🚀 본격 시동 걸렸습니다!", "홀더분들 기분 좋으시겠다 😁", "이거 진짜 가는 건가요?!", "폭등 중... 🔥🔥🔥"],
+    4: ["와... 이건 역사에 남을 것 같은데요? ✍️", "지금 못 탄 분들 손 떨리시죠? 😱", "🚀🚀🚀 하늘을 뚫을 기세!", "시간 여행 가능하면 어제 샀을 텐데 😭"],
+}
+
+_DOWN_COMMENTS: Dict[int, list] = {
+    1: ["으음... 조정인가요? 😅", "살짝 흔들리네요", "손이 떨리기 시작하는 구간 👀", "신경 쓰세요... 😐"],
+    2: ["이건 좀 아프다 💀", "손절 고민하시는 분들 계시죠?", "버텨야 하나... 🫠", "천리 길 주의 😨"],
+    3: ["🩸 처참하네요...", "이 구간이 진짜 시험대", "저가 매수 기회?? 아니면... 😬", "올라올라... 지하로 하하 😂"],
+    4: ["망했다... 😭😭😭", "숫자가 폭삭이네요 🤯", "이제 높은 거 파는 사람 없겠죠", "여기서 나가요 🚶"],
+}
+
+
+def _pick_comment(is_up: bool, level: int) -> str:
+    import random
+    bank = _UP_COMMENTS if is_up else _DOWN_COMMENTS
+    # 레벨 4 이상은 최고 단계 사용
+    tier = min(level, 4)
+    tier = max(tier, 1)
+    return random.choice(bank[tier])
+
+
 def send_price_alert(webhook_url: str, item: Dict[str, Any]) -> bool:
     """주가 급변동 알람을 Discord로 전송합니다."""
     ticker = item["ticker"]
@@ -214,11 +238,18 @@ def send_price_alert(webhook_url: str, item: Dict[str, Any]) -> bool:
     sign = "+" if is_up else ""
     color = 5763719 if is_up else 15158332  # 초록 : 빨강
 
+    # 레벨 계산 (threshold 기반)
+    alert_level = 1
+    if target_pct is not None and threshold and threshold > 0:
+        alert_level = max(1, int(abs(target_pct) / threshold))
+
+    comment = _pick_comment(is_up, alert_level)
+
     if target_pct is not None and threshold is not None:
         level_str = f"{'+' if target_pct >= 0 else ''}{target_pct:.0f}% 돌파"
-        title = f"{arrow}  [{ticker}]  {level_str}"
+        title = f"{arrow}  [{ticker}]  {level_str}  —  {comment}"
     else:
-        title = f"{arrow}  [{ticker}]  주가 급변동 알람"
+        title = f"{arrow}  [{ticker}]  주가 급변동 알람  —  {comment}"
 
     threshold_note = f"\n⚠️ 알람 설정: ±{threshold:.0f}% 단위" if threshold else ""
 
