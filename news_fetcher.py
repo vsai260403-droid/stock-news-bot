@@ -69,21 +69,34 @@ def fetch_yahoo_news(ticker: str) -> List[Dict[str, Any]]:
 
 
 # ── Google News RSS ────────────────────────────────────────────────────────────
-def fetch_google_news_rss(ticker: str) -> List[Dict[str, Any]]:
-    """Google News RSS 피드에서 해당 티커 관련 뉴스를 가져옵니다. (API 키 불필요)"""
+def fetch_google_news_rss(ticker: str, company_name: str = "") -> List[Dict[str, Any]]:
+    """Google News RSS 피드에서 해당 티커 관련 뉴스를 가져옵니다. (API 키 불필요)
+    
+    company_name이 제공되면 회사명을 포함한 더 정확한 검색을 수행합니다.
+    """
     try:
         import feedparser
+        from urllib.parse import quote
     except ImportError:
         logger.warning("feedparser 미설치 → Google News RSS 건너뜀. pip install feedparser")
         return []
 
+    # 검색 쿼리: 회사명이 있으면 "회사명 ticker stock", 없으면 "ticker stock"
+    if company_name and company_name.lower() != ticker.lower():
+        # 회사명 첫 단어 + ticker 조합으로 검색 (너무 긴 회사명 방지)
+        short_name = company_name.split()[0] if company_name else ticker
+        query = quote(f'"{ticker}" stock')
+    else:
+        query = quote(f"{ticker} stock")
+
     url = (
         f"https://news.google.com/rss/search"
-        f"?q={ticker}+stock&hl=en-US&gl=US&ceid=US:en"
+        f"?q={query}&hl=en-US&gl=US&ceid=US:en"
     )
     try:
         feed = feedparser.parse(url)
         result = []
+        ticker_upper = ticker.upper()
         for entry in feed.entries[:15]:
             raw_id = entry.get("id") or entry.get("link", "")
             # Google News RSS: entry.source.title 에 출판사 이름이 있음
@@ -91,14 +104,28 @@ def fetch_google_news_rss(ticker: str) -> List[Dict[str, Any]]:
             publisher = getattr(source_obj, "title", "Google News")
             published = entry.get("published_parsed")
             ts = int(calendar.timegm(published)) if published else 0
+            title = entry.get("title", "(제목 없음)")
+
+            # 관련성 필터: 제목에 ticker가 포함되지 않고 회사명도 없으면 스킵
+            title_lower = title.lower()
+            ticker_in_title = ticker_upper.lower() in title_lower
+            name_in_title = (
+                company_name.split()[0].lower() in title_lower
+                if company_name
+                else False
+            )
+            if not ticker_in_title and not name_in_title:
+                logger.debug("[%s] Google News 관련성 낮아 스킵: %s", ticker, title[:60])
+                continue
+
             result.append({
                 "id": f"gnews_{raw_id}",
-                "title": entry.get("title", "(제목 없음)"),
+                "title": title,
                 "link": entry.get("link", ""),
                 "publisher": publisher,
                 "publish_time": ts,
                 "source": "Google News",
-                "ticker": ticker.upper(),
+                "ticker": ticker_upper,
             })
         return result
 
@@ -157,6 +184,17 @@ def fetch_all_news(ticker: str, config: dict) -> List[Dict[str, Any]]:
     sources = config.get("news_sources", ["yahoo", "google_rss"])
     finnhub_key = config.get("finnhub_api_key", "").strip()
 
+    # Yahoo Finance에서 회사명을 가져와 Google News 검색 정확도 향상
+    company_name = ""
+    if "google_rss" in sources:
+        try:
+            from price_fetcher import fetch_price
+            info = fetch_price(ticker)
+            if info:
+                company_name = info.get("name", "")
+        except Exception:
+            pass
+
     seen_ids: set = set()
     seen_title_hashes: set = set()
     all_items: List[Dict[str, Any]] = []
@@ -180,7 +218,7 @@ def fetch_all_news(ticker: str, config: dict) -> List[Dict[str, Any]]:
         _add(fetch_yahoo_news(ticker))
 
     if "google_rss" in sources:
-        _add(fetch_google_news_rss(ticker))
+        _add(fetch_google_news_rss(ticker, company_name))
 
     if "finnhub" in sources and finnhub_key:
         _add(fetch_finnhub_news(ticker, finnhub_key))
@@ -218,6 +256,7 @@ def ai_summarize_news(title: str, publisher: str, gemini_api_key: str) -> Option
         client = OpenAI(
             api_key=gemini_api_key,
             base_url="https://generativelanguage.googleapis.com/v1beta/openai/",
+            max_retries=0,  # 429 시 자동 재시도 비활성화 (쿼터 낭비 방지)
         )
         prompt = (
             "당신은 주식 투자자를 위한 뉴스 번역·요약 도우미입니다. "
