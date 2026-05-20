@@ -53,7 +53,7 @@ def _gemini_find_twitter_accounts(ticker: str, gemini_api_key: str) -> Optional[
         )
         logger.info("[Gemini] %s 트위터 계정 탐색 요청", ticker)
         response = client.chat.completions.create(
-            model="gemini-2.0-flash",
+            model="gemini-2.5-flash-lite",
             messages=[{"role": "user", "content": prompt}],
         )
         text = response.choices[0].message.content.strip()
