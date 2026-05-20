@@ -490,7 +490,49 @@ def _make_bot(prefix: str):
         cfg = _load_config()
         cfg["check_interval_seconds"] = val
         _save_config(cfg)
-        await ctx.send(f"✅ 뉴스 체크 주기: **{val}초**로 변경됨")
+        await ctx.send(f"✅ 뉴스 체크 주기: **{val}초**로 변경됨 (봇 재시작 후 적용)")
+
+    # ── !set-sec-interval ─────────────────────────────────────────────────────
+    @bot.command(name="set-sec-interval")
+    async def cmd_set_sec_interval(ctx, seconds: str = ""):
+        if not seconds:
+            cfg = _load_config()
+            current = cfg.get("sec_check_interval_seconds", 1800)
+            await ctx.send(f"현재 SEC 체크 주기: **{current}초** ({current//60}분)\n사용법: `!set-sec-interval 1800`")
+            return
+        try:
+            val = int(seconds)
+            if val < 60:
+                await ctx.send("❌ 최소 60초 이상이어야 합니다.")
+                return
+        except ValueError:
+            await ctx.send("❌ 숫자를 입력하세요.")
+            return
+        cfg = _load_config()
+        cfg["sec_check_interval_seconds"] = val
+        _save_config(cfg)
+        await ctx.send(f"✅ SEC 공시 체크 주기: **{val}초** ({val//60}분)로 변경됨 (봇 재시작 후 적용)")
+
+    # ── !set-twitter-interval ─────────────────────────────────────────────────
+    @bot.command(name="set-twitter-interval")
+    async def cmd_set_twitter_interval(ctx, seconds: str = ""):
+        if not seconds:
+            cfg = _load_config()
+            current = cfg.get("twitter_check_interval_seconds", 600)
+            await ctx.send(f"현재 트위터 체크 주기: **{current}초** ({current//60}분)\n사용법: `!set-twitter-interval 600`")
+            return
+        try:
+            val = int(seconds)
+            if val < 60:
+                await ctx.send("❌ 최소 60초 이상이어야 합니다.")
+                return
+        except ValueError:
+            await ctx.send("❌ 숫자를 입력하세요.")
+            return
+        cfg = _load_config()
+        cfg["twitter_check_interval_seconds"] = val
+        _save_config(cfg)
+        await ctx.send(f"✅ 트위터 체크 주기: **{val}초** ({val//60}분)로 변경됨 (봇 재시작 후 적용)")
 
     # ── !set-price-alert ──────────────────────────────────────────────────
     @bot.command(name="set-price-alert")
@@ -632,6 +674,8 @@ def _make_bot(prefix: str):
             "`!set-gemini-key AIza...` — Gemini API 키 (트위터 자동 탐색용, DM 권장)\n"
             "`!set-openai-key sk-...` — OpenAI API 키 (AI 요약용, DM 권장)\n"
             "`!set-interval 300` — 뉴스 체크 주기 (초)\n"
+            "`!set-sec-interval 1800` — SEC 공시 체크 주기 (초)\n"
+            "`!set-twitter-interval 600` — 트위터 체크 주기 (초)\n"
             "`!set-webhook URL` — Discord Webhook URL (DM 권장)\n"
             "\n"
             "`!help` — 이 도움말"
