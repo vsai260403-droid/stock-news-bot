@@ -42,6 +42,7 @@ def _gemini_find_twitter_accounts(ticker: str, gemini_api_key: str) -> Optional[
         client = OpenAI(
             api_key=gemini_api_key,
             base_url="https://generativelanguage.googleapis.com/v1beta/openai/",
+            max_retries=0,  # 429 시 자동 재시도 비활성화 (쿼터 낭비 방지)
         )
         prompt = (
             f"주식 티커 '{ticker}'의 공식 트위터(X) 계정 사용자명(username)을 알려주세요.\n"
