@@ -320,6 +320,71 @@ def _make_bot(prefix: str):
             lines.append(f"⚠️ 등록되지 않은 계정: {', '.join('@'+a for a in not_found)}")
         await ctx.send("\n".join(lines) or "제거할 계정이 없습니다.")
 
+    # ── !price ────────────────────────────────────────────────────────────────
+    @bot.command(name="price")
+    async def cmd_price(ctx, ticker: str = ""):
+        if not ticker:
+            await ctx.send("사용법: `!price AAPL`")
+            return
+        ticker = ticker.upper().strip()
+        import asyncio
+        loop = asyncio.get_event_loop()
+        from price_fetcher import fetch_price as _fetch_price
+        info = await loop.run_in_executor(None, _fetch_price, ticker)
+        if not info:
+            await ctx.send(f"❌ **{ticker}** — 주가 조회 실패 (티커 확인 필요)")
+            return
+        is_up = info["change"] >= 0
+        arrow = "📈" if is_up else "📉"
+        sign = "+" if is_up else ""
+        currency = info.get("currency", "USD")
+        from datetime import datetime
+        ts = info.get("timestamp", 0)
+        time_str = datetime.fromtimestamp(ts).strftime("%Y-%m-%d %H:%M") if ts else "N/A"
+        msg = (
+            f"{arrow} **[{ticker}]** {info.get('name', ticker)}\n"
+            f"💰 현재가: **{info['price']:,.2f} {currency}**\n"
+            f"📊 전일 대비: **{sign}{info['change_pct']:.2f}%** ({sign}{info['change']:,.2f} {currency})\n"
+            f"📌 전일 종가: {info['prev_close']:,.2f} {currency}\n"
+            f"🕐 {time_str}"
+        )
+        await ctx.send(msg)
+
+    # ── !earnings ─────────────────────────────────────────────────────────────
+    @bot.command(name="earnings")
+    async def cmd_earnings(ctx, ticker: str = ""):
+        if not ticker:
+            await ctx.send("사용법: `!earnings AAPL`")
+            return
+        ticker = ticker.upper().strip()
+        import asyncio
+        loop = asyncio.get_event_loop()
+        from price_fetcher import fetch_earnings as _fetch_earnings
+        info = await loop.run_in_executor(None, _fetch_earnings, ticker)
+        if not info:
+            await ctx.send(f"❌ **{ticker}** — 실적 발표 일정 조회 실패")
+            return
+        from datetime import datetime
+        lines = [f"📅 **[{ticker}]** 실적 발표 일정\n"]
+        dates = info.get("earnings_dates", [])
+        if dates:
+            for ts in dates:
+                dt_str = datetime.fromtimestamp(ts).strftime("%Y-%m-%d")
+                lines.append(f"• 실적 발표일: **{dt_str}**")
+        else:
+            lines.append("• 실적 발표일: 정보 없음")
+        if info.get("earnings_avg"):
+            lines.append(f"• EPS 예상: {info['earnings_avg']} (범위: {info.get('earnings_low','?')} ~ {info.get('earnings_high','?')})")
+        if info.get("revenue_avg"):
+            lines.append(f"• 매출 예상: {info['revenue_avg']}")
+        ex_div = info.get("exdividend_date")
+        if ex_div:
+            lines.append(f"• 배당락일: {datetime.fromtimestamp(ex_div).strftime('%Y-%m-%d')}")
+        div_date = info.get("dividend_date")
+        if div_date:
+            lines.append(f"• 배당 지급일: {datetime.fromtimestamp(div_date).strftime('%Y-%m-%d')}")
+        await ctx.send("\n".join(lines))
+
     # ── !set-openai-key ───────────────────────────────────────────────────────
     @bot.command(name="set-openai-key")
     async def cmd_set_openai_key(ctx, api_key: str = ""):
@@ -443,6 +508,10 @@ def _make_bot(prefix: str):
             "`!remove TSLA` — 티커 제거\n"
             "`!list` — 등록된 티커 목록\n"
             "`!status` — 시스템 상태 확인\n"
+            "\n"
+            "**[ 조회 ]**\n"
+            "`!price AAPL` — 현재 주가 조회\n"
+            "`!earnings AAPL` — 실적 발표 일정 조회\n"
             "\n"
             "**[ 트위터 관리 ]**\n"
             "`!twitter-on` — 트위터 알람 활성화\n"

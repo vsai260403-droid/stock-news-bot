@@ -195,3 +195,34 @@ def send_sec_alert(webhook_url: str, item: Dict[str, Any]) -> bool:
         "embeds": [embed],
     }
     return _post(webhook_url, payload)
+
+
+def send_price_alert(webhook_url: str, item: Dict[str, Any]) -> bool:
+    """주가 급변동 알람을 Discord로 전송합니다."""
+    ticker = item["ticker"]
+    name = item.get("name", ticker)
+    price = item["price"]
+    prev_close = item.get("prev_close", 0.0)
+    change = item.get("change", 0.0)
+    change_pct = item.get("change_pct", 0.0)
+    currency = item.get("currency", "USD")
+
+    is_up = change >= 0
+    arrow = "📈" if is_up else "📉"
+    sign = "+" if is_up else ""
+    color = 5763719 if is_up else 15158332  # 초록 : 빨강
+
+    embed: Dict[str, Any] = {
+        "title": f"{arrow}  [{ticker}]  주가 급변동 알람",
+        "color": color,
+        "description": (
+            f"**{name}**\n\n"
+            f"💰 현재가: **{price:,.2f} {currency}**\n"
+            f"📊 전일 대비: **{sign}{change_pct:.2f}%** ({sign}{change:,.2f} {currency})\n"
+            f"📌 전일 종가: {prev_close:,.2f} {currency}"
+        ),
+        "footer": {"text": f"Yahoo Finance  •  {ticker}"},
+        "timestamp": _fmt_iso_utc(item.get("timestamp", 0)),
+    }
+    payload = {"username": "주식 뉴스 봇 📈", "embeds": [embed]}
+    return _post(webhook_url, payload)

@@ -8,13 +8,15 @@ import logging
 import os
 import hashlib
 import time
-from typing import Set
-
 import schedule
 
+from datetime import date
+from typing import Dict, Set
+
 from discord_bot import start_bot_thread
-from discord_notifier import send_news_alert, send_sec_alert, send_tweet_alert
+from discord_notifier import send_news_alert, send_sec_alert, send_tweet_alert, send_price_alert
 from news_fetcher import fetch_all_news, ai_summarize_news
+from price_fetcher import fetch_price
 from sec_fetcher import fetch_sec_filings, filter_sec_by_age
 from twitter_fetcher import fetch_all_tweets
 
@@ -44,15 +46,40 @@ def load_config() -> dict:
 
 
 def load_seen(filepath: str) -> Set[str]:
+    """seen 파일 로드. dict 형식이면 7일 초과 항목 자동 제거."""
     if os.path.exists(filepath):
         with open(filepath, "r", encoding="utf-8") as f:
-            return set(json.load(f))
+            data = json.load(f)
+        if isinstance(data, list):
+            return set(data)
+        elif isinstance(data, dict):
+            cutoff = int(time.time()) - (7 * 24 * 3600)
+            return {k for k, v in data.items() if isinstance(v, (int, float)) and v >= cutoff}
     return set()
 
 
 def save_seen(filepath: str, seen: Set[str]) -> None:
+    """seen 파일 저장. {id: timestamp} 형식으로 저장, 7일 초과 항목 자동 제거."""
+    now = int(time.time())
+    cutoff = now - (7 * 24 * 3600)
+    # 기존 타임스탬프 로드
+    ts_map: Dict[str, int] = {}
+    if os.path.exists(filepath):
+        try:
+            with open(filepath, "r", encoding="utf-8") as f:
+                data = json.load(f)
+            if isinstance(data, dict):
+                ts_map = data
+        except Exception:
+            pass
+    # 새 항목은 현재 시각, 기존 항목은 원래 시각 유지, 7일 초과 항목 제거
+    result: Dict[str, int] = {}
+    for item_id in seen:
+        ts = ts_map.get(item_id, now)
+        if ts >= cutoff:
+            result[item_id] = ts
     with open(filepath, "w", encoding="utf-8") as f:
-        json.dump(sorted(seen), f, indent=2)
+        json.dump(result, f, indent=2)
 
 def _title_hash(title: str) -> str:
     """뉴스 제목의 해시 키를 반환합니다 (ID가 바뀌어도 동일 기사 중복 전송 방지)."""
@@ -75,6 +102,38 @@ def _validate_config(config: dict) -> bool:
         )
         return False
     return True
+
+
+# ─── 주가 변동 체크 ───────────────────────────────────────────────────────────
+_alerted_prices: Set[str] = set()  # "TICKER_YYYYMMDD" 형식, 당일 중복 알람 방지
+
+
+def check_prices(config: dict) -> int:
+    """등록 티커의 주가를 조회하고 전일 대비 임계값 초과 시 Discord 알람을 보냅니다."""
+    webhook_url = config["discord_webhook_url"]
+    tickers = config.get("tickers", [])
+    threshold = config.get("price_alert_threshold_pct", 5.0)
+    today = date.today().strftime("%Y%m%d")
+    count = 0
+
+    for ticker in tickers:
+        alert_key = f"{ticker}_{today}"
+        if alert_key in _alerted_prices:
+            continue  # 오늘 이미 알람 보냄
+        info = fetch_price(ticker)
+        if not info:
+            continue
+        if abs(info.get("change_pct", 0)) >= threshold:
+            if send_price_alert(webhook_url, info):
+                _alerted_prices.add(alert_key)
+                count += 1
+                logger.info(
+                    "[%s] 주가 급변동 알람: %.2f%% (현재 %.2f)",
+                    ticker, info["change_pct"], info["price"],
+                )
+            time.sleep(0.5)
+
+    return count
 
 
 # ─── 뉴스 체크 ────────────────────────────────────────────────────────────────
@@ -201,8 +260,10 @@ def main() -> None:
     news_interval = config.get("check_interval_seconds", 300)
     sec_interval = config.get("sec_check_interval_seconds", 1800)
     twitter_interval = config.get("twitter_check_interval_seconds", 600)
+    price_interval = config.get("price_check_interval_seconds", 300)
     monitor_sec = config.get("monitor_sec_filings", False)
     monitor_twitter = config.get("monitor_twitter", False)
+    monitor_price = config.get("monitor_price", True)
 
     # ── Discord 봇 스레드 시작 (선택적) ─────────────────────────────────────
     start_bot_thread(config)
@@ -227,6 +288,8 @@ def main() -> None:
         )
         logger.info("트위터 모니터링: ON  (%s)", account_summary or "계정 없음")
         logger.info("트위터 체크 주기: %d초", twitter_interval)
+    threshold = config.get("price_alert_threshold_pct", 5.0)
+    logger.info("주가 변동 알람: %.1f%% 이상 시 알람  (체크 주기: %d초)", threshold, price_interval)
     logger.info("=" * 60)
 
     # ── 초기 로드 (기존 항목은 알람 없이 seen 처리) ──────────────────────────
@@ -285,11 +348,19 @@ def main() -> None:
         if count > 0:
             logger.info("트위터 체크 완료 — 새 트윗: %d건", count)
 
+    def price_job() -> None:
+        cfg = load_config()
+        count = check_prices(cfg)
+        if count > 0:
+            logger.info("주가 변동 알람 전송: %d건", count)
+
     schedule.every(news_interval).seconds.do(news_job)
     if monitor_sec:
         schedule.every(sec_interval).seconds.do(sec_job)
     if monitor_twitter:
         schedule.every(twitter_interval).seconds.do(twitter_job)
+    if monitor_price:
+        schedule.every(price_interval).seconds.do(price_job)
 
     # ── 메인 루프 ─────────────────────────────────────────────────────────────
     while True:

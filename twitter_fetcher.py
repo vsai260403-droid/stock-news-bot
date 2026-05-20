@@ -162,4 +162,14 @@ def fetch_all_tweets(ticker: str, config: dict) -> List[Dict[str, Any]]:
         if len(usernames) > 1:
             time.sleep(0.5)  # 인스턴스 부하 분산
 
+    # 시간 필터: tweet_max_age_hours 이상 지난 트윗 제외 (기본 24시간)
+    max_age_hours = config.get("tweet_max_age_hours", 24)
+    if max_age_hours > 0:
+        cutoff_ts = int(time.time()) - (max_age_hours * 3600)
+        before = len(result)
+        result = [t for t in result if t.get("publish_time", 0) >= cutoff_ts]
+        skipped = before - len(result)
+        if skipped > 0:
+            logger.debug("[%s] 트윗 시간 필터: %d건 제외 (%d시간 이상 경과)", ticker, skipped, max_age_hours)
+
     return result
