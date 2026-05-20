@@ -51,6 +51,7 @@ def fetch_price(ticker: str) -> Optional[Dict[str, Any]]:
             "change_pct": change_pct,
             "currency": meta.get("currency", "USD"),
             "timestamp": meta.get("regularMarketTime", int(time.time())),
+            "market_state": meta.get("marketState", "UNKNOWN"),  # REGULAR / PRE / POST / CLOSED
         }
     except Exception as e:
         logger.error("[%s] 주가 조회 실패: %s", ticker, e)

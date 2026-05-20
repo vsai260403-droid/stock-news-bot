@@ -116,6 +116,7 @@ def check_prices(config: dict) -> int:
       threshold=5% 이면 5%/10%/15%... 돌파 시마다 알람.
       공배포(15% 돌파 후 10%로 다시 하락)는 알람 안 보냄.
       날짜가 바뀌면 레벨 자동 초기화.
+      장중(REGULAR)일 때만 알람 전송. 장외(PRE/POST/CLOSED)는 레벨 기록만 하고 알람 안 보냄.
     """
     webhook_url = config["discord_webhook_url"]
     tickers = config.get("tickers", [])
@@ -128,6 +129,9 @@ def check_prices(config: dict) -> int:
         if not info:
             continue
         change_pct = info.get("change_pct", 0.0)
+        market_state = info.get("market_state", "UNKNOWN")
+        is_regular = (market_state == "REGULAR")
+
         if change_pct >= 0:
             direction = "up"
         else:
@@ -135,13 +139,22 @@ def check_prices(config: dict) -> int:
 
         current_level = int(abs(change_pct) / threshold) if threshold > 0 else 0
         if current_level == 0:
-            continue  # 임계값 열욳하지 않음
+            continue  # 임계값 미달
 
         level_key = f"{ticker}_{today}_{direction}"
         max_alerted = _price_levels.get(level_key, 0)
 
         if current_level > max_alerted:
-            # 새로 돌파한 레벨마다 알람
+            if not is_regular:
+                # 장외 시간: 레벨만 기록하고 알람 안 보냄 (봇 재시작/첫 체크 오발 방지)
+                _price_levels[level_key] = current_level
+                logger.debug(
+                    "[%s] 장외(%s) 레벨%d 기록만 (알람 없음, %.2f%%)",
+                    ticker, market_state, current_level, change_pct,
+                )
+                continue
+
+            # 장중: 새로 돌파한 레벨마다 알람
             for lvl in range(max_alerted + 1, current_level + 1):
                 target_pct = lvl * threshold * (1 if direction == "up" else -1)
                 alert_info = dict(info)
