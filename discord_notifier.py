@@ -206,20 +206,31 @@ def send_price_alert(webhook_url: str, item: Dict[str, Any]) -> bool:
     change = item.get("change", 0.0)
     change_pct = item.get("change_pct", 0.0)
     currency = item.get("currency", "USD")
+    target_pct = item.get("target_pct")  # 돌파한 레벨 (None이면 단순 조회)
+    threshold = item.get("threshold")
 
     is_up = change >= 0
     arrow = "📈" if is_up else "📉"
     sign = "+" if is_up else ""
     color = 5763719 if is_up else 15158332  # 초록 : 빨강
 
+    if target_pct is not None and threshold is not None:
+        level_str = f"{'+' if target_pct >= 0 else ''}{target_pct:.0f}% 돌파"
+        title = f"{arrow}  [{ticker}]  {level_str}"
+    else:
+        title = f"{arrow}  [{ticker}]  주가 급변동 알람"
+
+    threshold_note = f"\n⚠️ 알람 설정: ±{threshold:.0f}% 단위" if threshold else ""
+
     embed: Dict[str, Any] = {
-        "title": f"{arrow}  [{ticker}]  주가 급변동 알람",
+        "title": title,
         "color": color,
         "description": (
             f"**{name}**\n\n"
             f"💰 현재가: **{price:,.2f} {currency}**\n"
             f"📊 전일 대비: **{sign}{change_pct:.2f}%** ({sign}{change:,.2f} {currency})\n"
             f"📌 전일 종가: {prev_close:,.2f} {currency}"
+            f"{threshold_note}"
         ),
         "footer": {"text": f"Yahoo Finance  •  {ticker}"},
         "timestamp": _fmt_iso_utc(item.get("timestamp", 0)),

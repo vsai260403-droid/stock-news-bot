@@ -105,11 +105,18 @@ def _validate_config(config: dict) -> bool:
 
 
 # ─── 주가 변동 체크 ───────────────────────────────────────────────────────────
-_alerted_prices: Set[str] = set()  # "TICKER_YYYYMMDD" 형식, 당일 중복 알람 방지
+# "TICKER_YYYYMMDD_up" 또는 "_down" 키 → 해당 날 트리거된 최대 레벨
+_price_levels: Dict[str, int] = {}
 
 
 def check_prices(config: dict) -> int:
-    """등록 티커의 주가를 조회하고 전일 대비 임계값 초과 시 Discord 알람을 보냅니다."""
+    """등록 티커의 주가를 조회하고, 임계값 배수마다 겹치는 새 레벨에서만 Discord 알람을 보냅니다.
+    
+    동작 방식:
+      threshold=5% 이면 5%/10%/15%... 돌파 시마다 알람.
+      공배포(15% 돌파 후 10%로 다시 하락)는 알람 안 보냄.
+      날짜가 바뀌면 레벨 자동 초기화.
+    """
     webhook_url = config["discord_webhook_url"]
     tickers = config.get("tickers", [])
     threshold = config.get("price_alert_threshold_pct", 5.0)
@@ -117,21 +124,39 @@ def check_prices(config: dict) -> int:
     count = 0
 
     for ticker in tickers:
-        alert_key = f"{ticker}_{today}"
-        if alert_key in _alerted_prices:
-            continue  # 오늘 이미 알람 보냄
         info = fetch_price(ticker)
         if not info:
             continue
-        if abs(info.get("change_pct", 0)) >= threshold:
-            if send_price_alert(webhook_url, info):
-                _alerted_prices.add(alert_key)
-                count += 1
-                logger.info(
-                    "[%s] 주가 급변동 알람: %.2f%% (현재 %.2f)",
-                    ticker, info["change_pct"], info["price"],
-                )
-            time.sleep(0.5)
+        change_pct = info.get("change_pct", 0.0)
+        if change_pct >= 0:
+            direction = "up"
+        else:
+            direction = "down"
+
+        current_level = int(abs(change_pct) / threshold) if threshold > 0 else 0
+        if current_level == 0:
+            continue  # 임계값 열욳하지 않음
+
+        level_key = f"{ticker}_{today}_{direction}"
+        max_alerted = _price_levels.get(level_key, 0)
+
+        if current_level > max_alerted:
+            # 새로 돌파한 레벨마다 알람
+            for lvl in range(max_alerted + 1, current_level + 1):
+                target_pct = lvl * threshold * (1 if direction == "up" else -1)
+                alert_info = dict(info)
+                alert_info["alert_level"] = lvl
+                alert_info["target_pct"] = target_pct
+                alert_info["threshold"] = threshold
+                if send_price_alert(webhook_url, alert_info):
+                    _price_levels[level_key] = lvl
+                    count += 1
+                    logger.info(
+                        "[%s] 주가 레벨%d 알람: %.2f%% 돌파 (현재 %.2f)",
+                        ticker, lvl, target_pct, info["price"],
+                    )
+                    time.sleep(0.5)
+            _price_levels[level_key] = current_level
 
     return count
 

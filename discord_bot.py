@@ -438,6 +438,53 @@ def _make_bot(prefix: str):
         _save_config(cfg)
         await ctx.send(f"✅ 뉴스 체크 주기: **{val}초**로 변경됨")
 
+    # ── !set-price-alert ──────────────────────────────────────────────────
+    @bot.command(name="set-price-alert")
+    async def cmd_set_price_alert(ctx, pct: str = ""):
+        if not pct:
+            cfg = _load_config()
+            current = cfg.get("price_alert_threshold_pct", 5.0)
+            monitor = cfg.get("monitor_price", True)
+            status = "🟢 활성" if monitor else "🔴 비활성"
+            await ctx.send(
+                f"현재 주가 알람: {status}\n"
+                f"임계값: **±{current:.1f}%** \u2014 이 배수마다 알람\n\n"
+                f"설정: `!set-price-alert 5` / `!price-alert-on` / `!price-alert-off`"
+            )
+            return
+        try:
+            val = float(pct.rstrip("%"))
+            if val <= 0 or val > 50:
+                await ctx.send("❌ 1~50 사이 값을 입력하세요.")
+                return
+        except ValueError:
+            await ctx.send("❌ 숫자를 입력하세요. 예: `!set-price-alert 5`")
+            return
+        cfg = _load_config()
+        cfg["price_alert_threshold_pct"] = val
+        cfg["monitor_price"] = True
+        _save_config(cfg)
+        await ctx.send(
+            f"✅ 주가 알람 임계값: **±{val:.1f}%**\n"
+            f"±{val:.0f}%, ±{val*2:.0f}%, ±{val*3:.0f}%... 돌파 시마다 알람"
+        )
+
+    # ── !price-alert-on / !price-alert-off ─────────────────────────────────
+    @bot.command(name="price-alert-on")
+    async def cmd_price_alert_on(ctx):
+        cfg = _load_config()
+        cfg["monitor_price"] = True
+        _save_config(cfg)
+        threshold = cfg.get("price_alert_threshold_pct", 5.0)
+        await ctx.send(f"🟢 주가 변동 알람 **활성** (임계값: ±{threshold:.1f}%)")
+
+    @bot.command(name="price-alert-off")
+    async def cmd_price_alert_off(ctx):
+        cfg = _load_config()
+        cfg["monitor_price"] = False
+        _save_config(cfg)
+        await ctx.send("🔴 주가 변동 알람 **비활성**")
+
     # ── !set-webhook ──────────────────────────────────────────────────────────
     @bot.command(name="set-webhook")
     async def cmd_set_webhook(ctx, url: str = ""):
@@ -512,6 +559,11 @@ def _make_bot(prefix: str):
             "**[ 조회 ]**\n"
             "`!price AAPL` — 현재 주가 조회\n"
             "`!earnings AAPL` — 실적 발표 일정 조회\n"
+            "\n"
+            "**[ 주가 알람 ]**\n"
+            "`!set-price-alert 5` — 임계값 설정 (5% 단위마다 알람, 인자 없으면 현재 설정 확인)\n"
+            "`!price-alert-on` — 주가 변동 알람 활성화\n"
+            "`!price-alert-off` — 주가 변동 알람 비활성화\n"
             "\n"
             "**[ 트위터 관리 ]**\n"
             "`!twitter-on` — 트위터 알람 활성화\n"
