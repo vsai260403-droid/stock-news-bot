@@ -134,6 +134,9 @@ def check_prices(config: dict) -> int:
             direction = "down"
 
         current_level = int(abs(change_pct) / threshold) if threshold > 0 else 0
+        # 최대 100% 까지만 (그 이상은 알람 없음)
+        max_possible_level = int(100 / threshold) if threshold > 0 else 20
+        current_level = min(current_level, max_possible_level)
         if current_level == 0:
             continue  # 임계값 열욳하지 않음
 

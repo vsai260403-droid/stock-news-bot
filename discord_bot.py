@@ -464,9 +464,14 @@ def _make_bot(prefix: str):
         cfg["price_alert_threshold_pct"] = val
         cfg["monitor_price"] = True
         _save_config(cfg)
+        max_level = int(100 / val)
+        levels = ", ".join(f"±{val*i:.0f}%" for i in range(1, min(6, max_level + 1)))
+        if max_level >= 6:
+            levels += f" ... ±100%"
         await ctx.send(
             f"✅ 주가 알람 임계값: **±{val:.1f}%**\n"
-            f"±{val:.0f}%, ±{val*2:.0f}%, ±{val*3:.0f}%... 돌파 시마다 알람"
+            f"알람 발생 구간: {levels}\n"
+            f"(상승/하락 각각 독립 추적, 최대 ±100%)"
         )
 
     # ── !price-alert-on / !price-alert-off ─────────────────────────────────
