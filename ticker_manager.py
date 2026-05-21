@@ -46,6 +46,7 @@ def _gemini_find_twitter_accounts(ticker: str, gemini_api_key: str) -> Optional[
         )
         prompt = (
             f"주식 티커 '{ticker}'의 공식 트위터(X) 계정 사용자명(username)을 알려주세요.\n"
+            "주식 티커 '{ticker}'의 미국 상장회사 공식 X 계정을 찾아라.암호화폐/코인/블록체인 프로젝트 계정은 제외하라.가능하면 회사명, 거래소, 산업을 기준으로 판단하라.\n"
             "회사 공식 계정과 CEO/창립자/주요 임원의 개인 계정을 포함해서 최대 3개까지만 알려주세요.\n"
             "반드시 아래 형식으로만 답하세요 (설명 없이 콤마로 구분된 username만):\n"
             "username1,username2,username3\n\n"
@@ -53,7 +54,7 @@ def _gemini_find_twitter_accounts(ticker: str, gemini_api_key: str) -> Optional[
         )
         logger.info("[Gemini] %s 트위터 계정 탐색 요청", ticker)
         response = client.chat.completions.create(
-            model="gemini-2.5-flash-lite",
+            model="gemini-3.1-flash-lite",
             messages=[{"role": "user", "content": prompt}],
         )
         text = response.choices[0].message.content.strip()

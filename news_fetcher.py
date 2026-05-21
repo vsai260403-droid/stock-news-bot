@@ -263,7 +263,7 @@ def ai_summarize_news(title: str, publisher: str, gemini_api_key: str) -> Option
             "당신은 주식 투자자를 위한 뉴스 번역·요약 도우미입니다. "
             "영어 뉴스 제목과 출처를 받으면, "
             "한국어로 자연스럽게 번역하고 투자자에게 중요한 핵심 내용을 "
-            "1~2문장으로 간결하게 설명해 주세요.\n"
+            "간결하게 설명해 주세요.무슨 내용인지 충분히 요약되어서 설명되어야해요\n"
             "그 다음 줄바꿈 후, 이 뉴스에 대해 일반 투자자 시각에서 "
             "짧고 재치있는 한마디를 ➡️ 이모지와 함께 한 줄로 추가해 주세요. "
             "예: ➡️ \"실적 발표 앞두고 긴장되는 구간이네요 😅\"\n\n"
@@ -273,7 +273,7 @@ def ai_summarize_news(title: str, publisher: str, gemini_api_key: str) -> Option
         for attempt in range(1, max_retries + 1):
             try:
                 response = client.chat.completions.create(
-                    model="gemini-2.5-flash-lite",
+                    model="gemini-3.1-flash-lite",
                     messages=[{"role": "user", "content": prompt}],
                 )
                 return response.choices[0].message.content.strip()
