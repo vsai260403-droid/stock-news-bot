@@ -256,7 +256,8 @@ def ai_summarize_news(title: str, publisher: str, gemini_api_key: str) -> Option
         client = OpenAI(
             api_key=gemini_api_key,
             base_url="https://generativelanguage.googleapis.com/v1beta/openai/",
-            max_retries=0,  # 429 시 자동 재시도 비활성화 (쿼터 낭비 방지)
+            max_retries=0,  # 자동 재시도 비활성화 (직접 제어)
+            timeout=30.0,
         )
         prompt = (
             "당신은 주식 투자자를 위한 뉴스 번역·요약 도우미입니다. "
@@ -268,11 +269,23 @@ def ai_summarize_news(title: str, publisher: str, gemini_api_key: str) -> Option
             "예: ➡️ \"실적 발표 앞두고 긴장되는 구간이네요 😅\"\n\n"
             f"출처: {publisher}\n제목: {title}"
         )
-        response = client.chat.completions.create(
-            model="gemini-2.5-flash-lite",
-            messages=[{"role": "user", "content": prompt}],
-        )
-        return response.choices[0].message.content.strip()
+        max_retries = 3
+        for attempt in range(1, max_retries + 1):
+            try:
+                response = client.chat.completions.create(
+                    model="gemini-2.5-flash-lite",
+                    messages=[{"role": "user", "content": prompt}],
+                )
+                return response.choices[0].message.content.strip()
+            except Exception as e:
+                err_str = str(e)
+                is_503 = "503" in err_str or "Service Unavailable" in err_str or "high demand" in err_str.lower()
+                if is_503 and attempt < max_retries:
+                    logger.warning("AI 요약 503 에러 (시도 %d/%d) — 30초 후 재시도: %s", attempt, max_retries, e)
+                    time.sleep(30)
+                else:
+                    logger.warning("AI 요약 실패 (시도 %d/%d): %s", attempt, max_retries, e)
+                    return None
     except Exception as e:
-        logger.warning("AI 요약 실패: %s", e)
+        logger.warning("AI 요약 클라이언트 생성 실패: %s", e)
         return None
