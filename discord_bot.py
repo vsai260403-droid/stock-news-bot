@@ -121,23 +121,23 @@ def _save_config(config: dict) -> None:
 
 
 def _make_bot(prefix: str):
-        # ── !price-check ──────────────────────────────────────────────────────────
-        @bot.command(name="price-check")
-        async def cmd_price_check(ctx):
-            """모든 티커의 가격 변동 알람 체크를 수동으로 실행합니다."""
-            import asyncio
-            import importlib
-            # main.py의 check_prices와 load_config를 동적으로 import
-            main_mod = importlib.import_module("main")
-            check_prices = getattr(main_mod, "check_prices")
-            load_config = getattr(main_mod, "load_config")
-            loop = asyncio.get_event_loop()
-            cfg = await loop.run_in_executor(None, load_config)
-            count = await loop.run_in_executor(None, check_prices, cfg)
-            if count > 0:
-                await ctx.send(f"✅ 가격 변동 알람 체크 완료! (알람 전송: {count}건)")
-            else:
-                await ctx.send("가격 변동 알람 체크 완료 (전송된 알람 없음)")
+    # ── !price-check ──────────────────────────────────────────────────────────
+    @bot.command(name="price-check")
+    async def cmd_price_check(ctx):
+        """모든 티커의 가격 변동 알람 체크를 수동으로 실행합니다."""
+        import asyncio
+        import importlib
+        # main.py의 check_prices와 load_config를 동적으로 import
+        main_mod = importlib.import_module("main")
+        check_prices = getattr(main_mod, "check_prices")
+        load_config = getattr(main_mod, "load_config")
+        loop = asyncio.get_event_loop()
+        cfg = await loop.run_in_executor(None, load_config)
+        count = await loop.run_in_executor(None, check_prices, cfg)
+        if count > 0:
+            await ctx.send(f"✅ 가격 변동 알람 체크 완료! (알람 전송: {count}건)")
+        else:
+            await ctx.send("가격 변동 알람 체크 완료 (전송된 알람 없음)")
     """discord.py Bot 인스턴스와 커맨드를 생성합니다."""
     try:
         import discord
