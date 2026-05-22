@@ -121,6 +121,48 @@ def _save_config(config: dict) -> None:
 
 
 def _make_bot(prefix: str):
+        # ── !test-price-alert (관리자 전용) ───────────────────────────────────────
+        @bot.command(name="test-price-alert")
+        async def cmd_test_price_alert(ctx, ticker: str = "", percent: str = ""):
+            # 관리자 권한 체크
+            if not getattr(ctx.author, "guild_permissions", None) or not ctx.author.guild_permissions.administrator:
+                await ctx.send("❌ 이 명령어는 관리자만 사용할 수 있습니다.")
+                return
+            if not ticker or not percent:
+                await ctx.send("사용법: `!test-price-alert TSLA 7.4` (티커, 퍼센트)")
+                return
+            ticker = ticker.upper().strip()
+            try:
+                pct = float(percent)
+            except ValueError:
+                await ctx.send("❌ 퍼센트는 숫자로 입력하세요. 예: `!test-price-alert TSLA 7.4`.")
+                return
+            # 가격 정보 조회
+            import asyncio
+            loop = asyncio.get_event_loop()
+            from price_fetcher import fetch_price as _fetch_price
+            info = await loop.run_in_executor(None, _fetch_price, ticker)
+            if not info:
+                await ctx.send(f"❌ **{ticker}** — 주가 조회 실패 (티커 확인 필요)")
+                return
+            # 알람 데이터 구성
+            cfg = _load_config()
+            webhook_url = cfg.get("discord_webhook_url")
+            threshold = cfg.get("price_alert_threshold_pct", 5.0)
+            is_up = pct >= 0
+            direction = "up" if is_up else "down"
+            alert_level = max(1, int(abs(pct) / threshold)) if threshold > 0 else 1
+            target_pct = pct
+            alert_info = dict(info)
+            alert_info["alert_level"] = alert_level
+            alert_info["target_pct"] = target_pct
+            alert_info["threshold"] = threshold
+            from discord_notifier import send_price_alert as _send_price_alert
+            ok = await loop.run_in_executor(None, _send_price_alert, webhook_url, alert_info)
+            if ok:
+                await ctx.send(f"✅ 테스트 주가 알람 전송 완료! (티커: {ticker}, {pct:+.2f}%)")
+            else:
+                await ctx.send("❌ 알람 전송 실패 (웹훅 설정 또는 네트워크 오류)")
     """discord.py Bot 인스턴스와 커맨드를 생성합니다."""
     try:
         import discord
