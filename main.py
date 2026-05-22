@@ -231,8 +231,9 @@ def check_sec(config: dict, seen: Set[str], initial: bool = False) -> int:
         items = filter_sec_by_age(items, max_age_days)
         for item in items:
             item_id = item["id"]
-            if not item_id or item_id in seen:
-                continue
+            # [SEC TEST] 모든 공시를 알림 대상으로 처리 (seen 무시)
+            # if not item_id or item_id in seen:
+            #     continue
             seen.add(item_id)
             if not initial:
                 # AI 한글 요약
