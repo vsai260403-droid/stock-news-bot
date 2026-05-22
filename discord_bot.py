@@ -121,6 +121,21 @@ def _save_config(config: dict) -> None:
 
 
 def _make_bot(prefix: str):
+    """discord.py Bot 인스턴스와 커맨드를 생성합니다."""
+    try:
+        import discord
+        from discord.ext import commands
+    except ImportError:
+        logger.error(
+            "discord.py 가 설치되어 있지 않습니다. pip install discord.py"
+        )
+        return None
+
+    intents = discord.Intents.default()
+    intents.message_content = True  # Developer Portal 에서 반드시 활성화 필요
+
+    bot = commands.Bot(command_prefix=prefix, intents=intents, help_command=None)
+
     # ── !price-check ──────────────────────────────────────────────────────────
     @bot.command(name="price-check")
     async def cmd_price_check(ctx):
@@ -138,20 +153,6 @@ def _make_bot(prefix: str):
             await ctx.send(f"✅ 가격 변동 알람 체크 완료! (알람 전송: {count}건)")
         else:
             await ctx.send("가격 변동 알람 체크 완료 (전송된 알람 없음)")
-    """discord.py Bot 인스턴스와 커맨드를 생성합니다."""
-    try:
-        import discord
-        from discord.ext import commands
-    except ImportError:
-        logger.error(
-            "discord.py 가 설치되어 있지 않습니다. pip install discord.py"
-        )
-        return None
-
-    intents = discord.Intents.default()
-    intents.message_content = True  # Developer Portal 에서 반드시 활성화 필요
-
-    bot = commands.Bot(command_prefix=prefix, intents=intents, help_command=None)
 
     # ── 이벤트 ────────────────────────────────────────────────────────────────
     @bot.event
