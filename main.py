@@ -10,7 +10,7 @@ import hashlib
 import time
 import schedule
 
-from datetime import date
+from datetime import date, datetime
 from typing import Dict, Set
 
 from discord_bot import start_bot_thread
@@ -107,8 +107,11 @@ def _validate_config(config: dict) -> bool:
 
 
 # ─── 주가 변동 체크 ───────────────────────────────────────────────────────────
-# "TICKER_YYYYMMDD_up" 또는 "_down" 키 → 해당 날 트리거된 최대 레벨
+# "TICKER_{session_id}_up" 또는 "_down" 키 → 해당 거래 세션에서 트리거된 최대 레벨
 _price_levels: Dict[str, int] = {}
+# PRE 감지 시 갱신되는 거래 세션 ID (ticker → session_id)
+# PRE = 새 거래일 시작 기준. REGULAR/POST는 동일 세션 이어받음.
+_trading_session: Dict[str, str] = {}
 
 
 def check_prices(config: dict) -> int:
@@ -117,10 +120,9 @@ def check_prices(config: dict) -> int:
     동작 방식:
       threshold=5% 이면 5%/10%/15%... 돌파 시마다 알람.
       공배포(15% 돌파 후 10%로 다시 하락)는 알람 안 보냄.
-      날짜가 바뀌면 레벨 자동 초기화.
-
-    Yahoo Finance의 marketState가 UNKNOWN으로 자주 들어오므로,
-    장 상태(REGULAR/PRE/POST/CLOSED/UNKNOWN)는 알림 차단 조건으로 사용하지 않는다.
+      PRE 수신 시 새 거래 세션 시작 → 레벨 자동 초기화.
+      REGULAR/POST는 PRE에서 시작된 동일 세션 이어받음.
+      CLOSED/UNKNOWN 등 장 외 상태는 체크 스킵.
     """
     if not config.get("monitor_price", True):
         logger.info("주가 변동 알람 비활성화 상태 — 체크 생략")
@@ -129,7 +131,6 @@ def check_prices(config: dict) -> int:
     webhook_url = config["discord_webhook_url"]
     tickers = config.get("tickers", [])
     threshold = float(config.get("price_alert_threshold_pct", 5.0) or 5.0)
-    today = date.today().strftime("%Y%m%d")
     count = 0
     checked = 0
 
@@ -145,6 +146,33 @@ def check_prices(config: dict) -> int:
         direction = "up" if change_pct >= 0 else "down"
         current_level = int(abs(change_pct) / threshold) if threshold > 0 else 0
 
+        # REGULAR / PRE / POST 상태일 때만 체크 및 저장
+        # CLOSED / UNKNOWN 등은 장이 열리지 않은 상태이므로 스킵
+        if market_state not in ("REGULAR", "PRE", "POST"):
+            logger.info(
+                "[%s] 주가 체크 스킵: market=%s (REGULAR/PRE/POST 아님)",
+                ticker, market_state,
+            )
+            continue
+
+        # PRE 수신 시 새 거래 세션 시작 (타임존 하드코딩 없이 서버 상태 전환 기준)
+        # REGULAR/POST는 기존 세션 이어받음, PRE가 없었던 경우(재시작 등)엔 새로 생성
+        market_ts = info.get("timestamp", int(time.time()))
+        if market_state == "PRE":
+            new_session = str(market_ts)
+            old_session = _trading_session.get(ticker)
+            if old_session != new_session:
+                # 같은 PRE 세션 내 중복 갱신 방지: 이전 세션과 5분 이상 차이날 때만 갱신
+                if old_session is None or abs(market_ts - int(old_session)) > 300:
+                    _trading_session[ticker] = new_session
+                    logger.info("[%s] 새 거래 세션 시작 (PRE 감지): session_id=%s", ticker, new_session)
+        elif ticker not in _trading_session:
+            # 서버 재시작 등으로 PRE를 못 받은 경우 현재 timestamp로 세션 초기화
+            _trading_session[ticker] = str(market_ts)
+            logger.info("[%s] 거래 세션 초기화 (%s 감지): session_id=%s", ticker, market_state, str(market_ts))
+
+        session_id = _trading_session[ticker]
+
         if current_level == 0:
             logger.info(
                 "[%s] 주가 체크: %.2f%% / 임계값 %.2f%% 미달 (market=%s)",
@@ -152,7 +180,7 @@ def check_prices(config: dict) -> int:
             )
             continue
 
-        level_key = f"{ticker}_{today}_{direction}"
+        level_key = f"{ticker}_{session_id}_{direction}"
         max_alerted = _price_levels.get(level_key, 0)
 
         if current_level <= max_alerted:
@@ -162,7 +190,7 @@ def check_prices(config: dict) -> int:
             )
             continue
 
-        # 장 상태와 무관하게 새로 돌파한 레벨마다 알림
+        # REGULAR/PRE/POST 상태에서 새로 돌파한 레벨마다 알림
         for lvl in range(max_alerted + 1, current_level + 1):
             target_pct = lvl * threshold * (1 if direction == "up" else -1)
             alert_info = dict(info)
