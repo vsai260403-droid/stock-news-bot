@@ -276,10 +276,8 @@ def check_sec(config: dict, seen: Set[str], initial: bool = False) -> int:
             if not initial:
                 # AI 한글 요약
                 if gemini_api_key:
-                    summary_title = (
-                        f"[{ticker}] SEC {item.get('form_type','')} 공시 "
-                        f"— {item.get('description','') or item.get('form_type','')}"
-                    )
+                    desc = item.get('description') or item.get('form_type', '')
+                    summary_title = f"[{ticker}] SEC {item.get('form_type','')} 공시 — {desc}"
                     item["ai_summary"] = ai_summarize_news(
                         summary_title, "SEC EDGAR", gemini_api_key
                     )

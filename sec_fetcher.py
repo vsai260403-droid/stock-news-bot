@@ -59,6 +59,49 @@ def _get_cik(ticker: str) -> Optional[str]:
     return _load_cik_map().get(ticker.upper())
 
 
+# 8-K 항목 코드 → 설명 매핑
+_8K_ITEMS = {
+    "1.01": "중요 계약 체결",
+    "1.02": "중요 계약 종료",
+    "1.03": "파산/회생 절차",
+    "1.04": "광산 안전 공시",
+    "1.05": "중요 사이버보안 사고",
+    "2.01": "자산 취득/처분",
+    "2.02": "실적 발표 (매출/이익)",
+    "2.03": "직접 금융 의무 발생",
+    "2.04": "트리거 이벤트 (채무불이행 등)",
+    "2.05": "임원 해고/이탈",
+    "2.06": "자산 손상",
+    "3.01": "상장폐지 통보",
+    "3.02": "주식 미등록 판매",
+    "3.03": "기존 주주 권리 변경",
+    "4.01": "회계법인 변경",
+    "4.02": "재무제표 재작성",
+    "5.01": "지배주주 변경",
+    "5.02": "임원 선임/사임/보상",
+    "5.03": "정관 변경",
+    "5.04": "임시주주총회 결의",
+    "5.05": "주주총회 결의/이사회 결의",
+    "5.06": "Shell company 변경",
+    "5.07": "주주총회 결과",
+    "5.08": "이사회 구성 변경",
+    "6.01": "자산담보증권 손실",
+    "7.01": "기타 공시 사항 (자발적)",
+    "7.02": "재무제표 및 부속서류",
+    "8.01": "기타 이벤트",
+    "9.01": "재무제표 및 첨부서류",
+}
+
+
+def _describe_8k_items(items_str: str) -> str:
+    """8-K 항목 코드 문자열을 사람이 읽기 쉬운 설명으로 변환합니다."""
+    if not items_str:
+        return ""
+    codes = [c.strip() for c in items_str.split(",") if c.strip()]
+    labels = [_8K_ITEMS.get(code, f"항목 {code}") for code in codes]
+    return ", ".join(labels)
+
+
 def fetch_sec_filings(ticker: str, form_types: List[str]) -> List[Dict[str, Any]]:
     """
     SEC EDGAR에서 해당 티커의 최신 공시를 가져옵니다.
@@ -91,6 +134,7 @@ def fetch_sec_filings(ticker: str, form_types: List[str]) -> List[Dict[str, Any]
         filing_dates = recent.get("filingDate", [])
         primary_docs = recent.get("primaryDocument", [])
         descriptions = recent.get("primaryDocDescription", [])
+        items_list = recent.get("items", [])  # 8-K 이벤트 항목 코드 (예: "2.02,7.01")
 
         result = []
         for i, form in enumerate(forms):
@@ -101,9 +145,16 @@ def fetch_sec_filings(ticker: str, form_types: List[str]) -> List[Dict[str, Any]
             filing_date = filing_dates[i] if i < len(filing_dates) else ""
             primary_doc = primary_docs[i] if i < len(primary_docs) else ""
             description = descriptions[i] if i < len(descriptions) else ""
+            items_str = items_list[i] if i < len(items_list) else ""
 
             if not accession:
                 continue
+
+            # 8-K 항목 코드를 사람이 읽기 쉬운 설명으로 변환
+            if items_str:
+                item_labels = _describe_8k_items(items_str)
+                if item_labels:
+                    description = item_labels
 
             accession_clean = accession.replace("-", "")
             if primary_doc:
