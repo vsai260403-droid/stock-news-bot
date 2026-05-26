@@ -26,12 +26,13 @@ _RSSHUB_INSTANCES: List[str] = [
 
 # ── Nitter 인스턴스 (fallback) ─────────────────────────────────────────
 # RSS URL 패턴: {base}/{username}/rss
+# nitter.net을 맨 앞에 배치 (가장 안정적)
 _NITTER_INSTANCES: List[str] = [
+    "https://nitter.net",
     "https://xcancel.com",
     "https://nitter.space",
     "https://nuku.trabun.org",
     "https://lightbrd.com",
-    "https://nitter.net",
     "https://nitter.privacyredirect.com",
     "https://nitter.kareem.one",
     "https://nitter.poast.org",
@@ -78,15 +79,19 @@ _BROWSER_HEADERS = {
 
 
 def _check_instance_health(instance: str, timeout: int = 6) -> bool:
-    """인스턴스가 RSS 응답을 주는지 확인합니다 (elonmusk 계정으로 테스트)."""
+    """인스턴스가 RSS 응답을 주는지 확인합니다 (twitter 계정으로 테스트 - 차단 가능성 낮음)."""
     try:
         import requests as _req
-        url = f"{instance.rstrip('/')}/elonmusk/rss"
+        # elonmusk 대신 twitter 공식 계정 사용 (차단 가능성 낮음)
+        url = f"{instance.rstrip('/')}/twitter/rss"
         r = _req.get(url, timeout=timeout, headers=_BROWSER_HEADERS)
         # content-type: rss, xml, text/xml, application/rss+xml 모두 허용
         ct = r.headers.get("content-type", "").lower()
-        return r.status_code == 200 and ("rss" in ct or "xml" in ct)
-    except Exception:
+        ok = r.status_code == 200 and ("rss" in ct or "xml" in ct)
+        logger.debug("[Health] %s → %s (status=%d, ct=%s)", instance, "OK" if ok else "FAIL", r.status_code, ct[:30])
+        return ok
+    except Exception as e:
+        logger.debug("[Health] %s → FAIL (%s)", instance, e)
         return False
 
 
@@ -94,12 +99,16 @@ def _check_rsshub_health(instance: str, timeout: int = 6) -> bool:
     """RSSHub 인스턴스가 응답을 주는지 확인합니다."""
     try:
         import requests as _req
-        url = f"{instance.rstrip('/')}/twitter/user/elonmusk"
+        # elonmusk 대신 twitter 공식 계정 사용
+        url = f"{instance.rstrip('/')}/twitter/user/twitter"
         r = _req.get(url, timeout=timeout, headers=_BROWSER_HEADERS)
         # content-type: rss, xml, text/xml, application/rss+xml 모두 허용
         ct = r.headers.get("content-type", "").lower()
-        return r.status_code == 200 and ("rss" in ct or "xml" in ct)
-    except Exception:
+        ok = r.status_code == 200 and ("rss" in ct or "xml" in ct)
+        logger.debug("[Health] RSSHub %s → %s (status=%d)", instance, "OK" if ok else "FAIL", r.status_code)
+        return ok
+    except Exception as e:
+        logger.debug("[Health] RSSHub %s → FAIL (%s)", instance, e)
         return False
 
 
@@ -153,10 +162,13 @@ def get_healthy_instances() -> List[str]:
         if now - _last_health_check >= _HEALTH_CHECK_INTERVAL or not _healthy_instances:
             _healthy_instances = _refresh_healthy_instances()
             _last_health_check = now
-            if not _healthy_instances:
-                # 모두 실패 시 전체 목록 폴백
-                logger.warning("[Twitter] 모든 인스턴스 다운 — 전체 목록으로 폴백")
-                _healthy_instances = list(_RSSHUB_INSTANCES) + list(_NITTER_INSTANCES)
+        # 건강 체크 결과와 무관하게 nitter.net은 항상 포함 (가장 안정적)
+        if "https://nitter.net" not in _healthy_instances:
+            _healthy_instances = ["https://nitter.net"] + _healthy_instances
+        if not _healthy_instances:
+            # 모두 실패 시 전체 목록 폴백
+            logger.warning("[Twitter] 모든 인스턴스 다운 — 전체 목록으로 폴백")
+            _healthy_instances = list(_NITTER_INSTANCES) + list(_RSSHUB_INSTANCES)
     return _healthy_instances
 
 
