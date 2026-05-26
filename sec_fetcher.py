@@ -136,7 +136,7 @@ def fetch_filing_text(filing_link: str, max_chars: int = 3000,
         except Exception:
             pass
 
-        # 파일 목록 가져오기 — EDGAR 인덱스 JSON
+        # 파일 목록 가져오기 — EDGAR 인덱스
         try:
             idx_url = (
                 f"https://www.sec.gov/Archives/edgar/data/"
@@ -151,20 +151,35 @@ def fetch_filing_text(filing_link: str, max_chars: int = 3000,
                 other_urls = []
                 for href in hrefs:
                     name = href.lower()
+                    # 상대경로 → 절대경로 올바르게 변환
+                    if href.startswith("http"):
+                        url = href
+                    elif href.startswith("/"):
+                        url = f"https://www.sec.gov{href}"
+                    else:
+                        # 파일명만 있는 경우 — base_url에 붙임
+                        url = idx_url + href
                     if "ex99" in name or "ex-99" in name or "exhibit99" in name or "press" in name:
-                        url = href if href.startswith("http") else f"https://www.sec.gov{href}"
                         exhibit_urls.append(url)
                     elif accession_clean.lower() in name or "8k" in name or "form" in name:
-                        url = href if href.startswith("http") else f"https://www.sec.gov{href}"
+                        other_urls.append(url)
+                    else:
                         other_urls.append(url)
 
-                for url in (exhibit_urls or other_urls)[:2]:
+                for url in (exhibit_urls + other_urls)[:4]:
                     try:
                         doc_resp = requests.get(url, headers=_HEADERS, timeout=12)
                         if doc_resp.status_code == 200:
                             text = _clean_html(doc_resp.text)
-                            if len(text) > 200:  # 의미있는 내용 있을 때만
-                                logger.debug("SEC Exhibit 가져오기 성공: %s", url)
+                            if len(text) > 300:  # 의미있는 내용 있을 때만
+                                # 본문 시작 지점 찾기
+                                for kw in ["ITEM ", "Item ", "PRESS RELEASE", "PURSUANT TO",
+                                           "WHEREAS", "RESOLVED", "AGREEMENT", "Dear "]:
+                                    idx = text.find(kw)
+                                    if 0 < idx < 5000:
+                                        text = text[idx:]
+                                        break
+                                logger.debug("SEC 문서 읽기 성공: %s (%d자)", url, len(text))
                                 return text[:max_chars]
                     except Exception:
                         continue
@@ -177,9 +192,10 @@ def fetch_filing_text(filing_link: str, max_chars: int = 3000,
         resp.raise_for_status()
         text = _clean_html(resp.text)
         # 본문 시작 지점 찾기
-        for keyword in ["ITEM ", "Item ", "PRESS RELEASE", "PURSUANT TO", "AGREEMENT", "WHEREAS"]:
+        for keyword in ["ITEM ", "Item ", "PRESS RELEASE", "PURSUANT TO",
+                        "AGREEMENT", "WHEREAS", "RESOLVED"]:
             idx = text.find(keyword)
-            if 0 < idx < 3000:
+            if 0 < idx < 5000:
                 text = text[idx:]
                 break
         return text[:max_chars]
