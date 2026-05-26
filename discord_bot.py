@@ -404,11 +404,13 @@ def _make_bot(prefix: str):
         username = username.lstrip("@").strip()
         await ctx.send(f"🔍 **@{username}** Nitter 수집 테스트 중...")
 
-        from twitter_fetcher import DEFAULT_NITTER_INSTANCES, _try_fetch_rss
+        from twitter_fetcher import _ALL_NITTER_INSTANCES, _try_fetch_rss, get_healthy_instances
         import asyncio
 
         cfg = _load_config()
-        instances = cfg.get("nitter_instances", DEFAULT_NITTER_INSTANCES)
+        # config에 직접 지정된 경우 그것 사용, 없으면 자동 체크 목록
+        custom = cfg.get("nitter_instances")
+        instances = custom or _ALL_NITTER_INSTANCES
         lines = []
         found = 0
 
@@ -420,7 +422,7 @@ def _make_bot(prefix: str):
                 latest = result[0].get("title", "")[:60]
                 lines.append(f"✅ `{inst}`  →  {len(result)}개  (최신: {latest}...)")
                 found += len(result)
-                break  # 첫 성공 인스턴스만 표시
+                break
             else:
                 lines.append(f"❌ `{inst}`  →  실패")
 
