@@ -395,6 +395,42 @@ def _make_bot(prefix: str):
             lines.append(f"⚠️ 등록되지 않은 계정: {', '.join('@'+a for a in not_found)}")
         await ctx.send("\n".join(lines) or "제거할 계정이 없습니다.")
 
+    # ── !twitter-test (Nitter 수집 테스트) ───────────────────────────────────
+    @bot.command(name="twitter-test")
+    async def cmd_twitter_test(ctx, username: str = ""):
+        if not username:
+            await ctx.send("사용법: `!twitter-test @elonmusk`")
+            return
+        username = username.lstrip("@").strip()
+        await ctx.send(f"🔍 **@{username}** Nitter 수집 테스트 중...")
+
+        from twitter_fetcher import DEFAULT_NITTER_INSTANCES, _try_fetch_rss
+        import asyncio
+
+        cfg = _load_config()
+        instances = cfg.get("nitter_instances", DEFAULT_NITTER_INSTANCES)
+        lines = []
+        found = 0
+
+        for inst in instances:
+            result = await asyncio.get_event_loop().run_in_executor(
+                None, _try_fetch_rss, inst, username
+            )
+            if result:
+                latest = result[0].get("title", "")[:60]
+                lines.append(f"✅ `{inst}`  →  {len(result)}개  (최신: {latest}...)")
+                found += len(result)
+                break  # 첫 성공 인스턴스만 표시
+            else:
+                lines.append(f"❌ `{inst}`  →  실패")
+
+        if found:
+            lines.append(f"\n총 {found}개 트윗 수집 성공")
+        else:
+            lines.append(f"\n⚠️ 모든 Nitter 인스턴스에서 **@{username}** 수집 실패\n"
+                         "Nitter 인스턴스가 모두 다운됐거나 계정명이 잘못됐을 수 있습니다.")
+        await ctx.send("\n".join(lines))
+
     # ── !twitter-follows (전용 계정 목록 조회) ────────────────────────────────
     @bot.command(name="twitter-follows")
     async def cmd_twitter_follows(ctx):
@@ -796,6 +832,7 @@ def _make_bot(prefix: str):
             "`!twitter-unfollow @elonmusk` — 단독 계정 제거\n"
             "`!twitter-follows` — 단독 팔로우 계정 목록\n"
             "`!twitter-unfollow-all` — 단독 팔로우 계정 전체 제거\n"
+            "`!twitter-test @elonmusk` — Nitter 수집 테스트\n"
             "\n"
             "**[ 설정 ]**\n"
             "`!set-gemini-key AIza...` — Gemini API 키 (트위터 자동 탐색용, DM 권장)\n"
