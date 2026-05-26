@@ -698,16 +698,18 @@ def _make_bot(prefix: str):
         ticker = ticker.upper().strip()
         await ctx.send(f"🔍 **{ticker}** SEC 공시 수집 테스트 중...")
         try:
-            from sec_fetcher import fetch_sec_filings
+            from sec_fetcher import fetch_sec_filings, filter_sec_by_age
             from discord_notifier import send_sec_alert
 
             cfg = _load_config()
             webhook_url = cfg.get("discord_webhook_url", "")
             form_types = cfg.get("sec_form_types", ["8-K", "10-K", "10-Q", "SC 13G", "SC 13D"])
+            max_age_days = cfg.get("sec_max_age_days", 30)
 
             filings = fetch_sec_filings(ticker, form_types)
+            filings = filter_sec_by_age(filings, max_age_days)
             if not filings:
-                await ctx.send(f"⚠️ **{ticker}** SEC 공시 없음 (최근 30일 이내 공시가 없거나 CIK 매핑 실패)")
+                await ctx.send(f"⚠️ **{ticker}** SEC 공시 없음 (최근 {max_age_days}일 이내 공시가 없거나 CIK 매핑 실패)")
                 return
 
             await ctx.send(f"📄 **{ticker}** 공시 {len(filings)}건 수집됨 — Discord 알람 전송 중...")
