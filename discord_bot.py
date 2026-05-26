@@ -698,7 +698,7 @@ def _make_bot(prefix: str):
         ticker = ticker.upper().strip()
         await ctx.send(f"🔍 **{ticker}** SEC 공시 수집 테스트 중...")
         try:
-            from sec_fetcher import fetch_sec_filings, filter_sec_by_age
+            from sec_fetcher import fetch_sec_filings, filter_sec_by_age, fetch_filing_text
             from discord_notifier import send_sec_alert
 
             cfg = _load_config()
@@ -720,8 +720,16 @@ def _make_bot(prefix: str):
                 filing["ticker"] = ticker
                 if gemini_api_key and not filing.get("ai_summary"):
                     desc = filing.get("description") or filing.get("form_type", "")
+                    body = fetch_filing_text(filing.get("link", ""))
+                    if body:
+                        summary_input = (
+                            f"[{ticker}] SEC {filing.get('form_type','')} 공시 ({desc})\n\n"
+                            f"{body}"
+                        )
+                    else:
+                        summary_input = f"[{ticker}] SEC {filing.get('form_type','')} 공시 — {desc}"
                     filing["ai_summary"] = ai_summarize_news(
-                        f"[{ticker}] SEC {filing.get('form_type','')} 공시 — {desc}",
+                        summary_input,
                         "SEC EDGAR",
                         gemini_api_key,
                     )

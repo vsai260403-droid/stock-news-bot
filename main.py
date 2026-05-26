@@ -17,7 +17,7 @@ from discord_bot import start_bot_thread
 from discord_notifier import send_news_alert, send_sec_alert, send_tweet_alert, send_price_alert
 from news_fetcher import fetch_all_news, ai_summarize_news
 from price_fetcher import fetch_price
-from sec_fetcher import fetch_sec_filings, filter_sec_by_age
+from sec_fetcher import fetch_sec_filings, filter_sec_by_age, fetch_filing_text
 from twitter_fetcher import fetch_all_tweets
 
 # ─── 로깅 설정 ────────────────────────────────────────────────────────────────
@@ -274,12 +274,19 @@ def check_sec(config: dict, seen: Set[str], initial: bool = False) -> int:
                 continue
             seen.add(item_id)
             if not initial:
-                # AI 한글 요약
+                # AI 한글 요약 — 실제 문서 본문 기반
                 if gemini_api_key:
                     desc = item.get('description') or item.get('form_type', '')
-                    summary_title = f"[{ticker}] SEC {item.get('form_type','')} 공시 — {desc}"
+                    body = fetch_filing_text(item.get("link", ""))
+                    if body:
+                        summary_input = (
+                            f"[{ticker}] SEC {item.get('form_type','')} 공시 ({desc})\n\n"
+                            f"{body}"
+                        )
+                    else:
+                        summary_input = f"[{ticker}] SEC {item.get('form_type','')} 공시 — {desc}"
                     item["ai_summary"] = ai_summarize_news(
-                        summary_title, "SEC EDGAR", gemini_api_key
+                        summary_input, "SEC EDGAR", gemini_api_key
                     )
                 if send_sec_alert(webhook_url, item):
                     count += 1

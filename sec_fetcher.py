@@ -102,6 +102,34 @@ def _describe_8k_items(items_str: str) -> str:
     return ", ".join(labels)
 
 
+def fetch_filing_text(filing_link: str, max_chars: int = 3000) -> str:
+    """SEC 공시 문서의 실제 본문 텍스트를 가져옵니다 (AI 요약용)."""
+    try:
+        import re as _re
+        resp = requests.get(filing_link, headers=_HEADERS, timeout=15)
+        resp.raise_for_status()
+        content = resp.text
+
+        # HTML 태그 제거
+        text = _re.sub(r"<[^>]+>", " ", content)
+        # 연속 공백/줄바꿈 정리
+        text = _re.sub(r"[ \t]+", " ", text)
+        text = _re.sub(r"\n{3,}", "\n\n", text)
+        text = text.strip()
+
+        # 의미없는 앞부분(헤더/테이블) 건너뛰고 본문 시작 지점 찾기
+        for keyword in ["ITEM ", "Item ", "PURSUANT TO", "PRESS RELEASE", "AGREEMENT"]:
+            idx = text.find(keyword)
+            if idx > 0 and idx < 2000:
+                text = text[idx:]
+                break
+
+        return text[:max_chars]
+    except Exception as e:
+        logger.debug("SEC 문서 본문 가져오기 실패 (%s): %s", filing_link, e)
+        return ""
+
+
 def fetch_sec_filings(ticker: str, form_types: List[str]) -> List[Dict[str, Any]]:
     """
     SEC EDGAR에서 해당 티커의 최신 공시를 가져옵니다.
