@@ -63,6 +63,18 @@ _last_health_check: float = 0.0
 _HEALTH_CHECK_INTERVAL: float = 3600.0
 _health_lock = threading.Lock()
 
+# 브라우저 헤더 (봇 차단 회피) — 모든 함수에서 사용하므로 여기 정의
+_BROWSER_HEADERS = {
+    "User-Agent": (
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+        "AppleWebKit/537.36 (KHTML, like Gecko) "
+        "Chrome/124.0.0.0 Safari/537.36"
+    ),
+    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+    "Accept-Language": "en-US,en;q=0.5",
+    "Accept-Encoding": "gzip, deflate",
+    "Connection": "keep-alive",
+}
 
 
 def _check_instance_health(instance: str, timeout: int = 6) -> bool:
@@ -144,18 +156,6 @@ def get_healthy_instances() -> List[str]:
     return _healthy_instances
 
 
-# Nitter 인스턴스 요청에 사용할 브라우저 헤더 (봇 차단 회피)
-_BROWSER_HEADERS = {
-    "User-Agent": (
-        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-        "AppleWebKit/537.36 (KHTML, like Gecko) "
-        "Chrome/124.0.0.0 Safari/537.36"
-    ),
-    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-    "Accept-Language": "en-US,en;q=0.5",
-    "Accept-Encoding": "gzip, deflate",
-    "Connection": "keep-alive",
-}
 KNOWN_ACCOUNTS: Dict[str, List[str]] = {
     "TSLA": ["Tesla", "elonmusk"],
     "AAPL": ["Apple", "tim_cook"],
