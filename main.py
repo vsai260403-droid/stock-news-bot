@@ -5,6 +5,7 @@ main.py - 주식 뉴스 Discord 알람 메인 실행 파일
 """
 import json
 import logging
+import logging.handlers
 import os
 import hashlib
 import time
@@ -22,12 +23,18 @@ from sec_fetcher import fetch_sec_filings, filter_sec_by_age, fetch_filing_text
 from twitter_fetcher import fetch_all_tweets
 
 # ─── 로깅 설정 ────────────────────────────────────────────────────────────────
+_LOG_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "logs")
+os.makedirs(_LOG_DIR, exist_ok=True)
+_LOG_FILE = os.path.join(_LOG_DIR, "main.log")
+
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s [%(levelname)s] %(message)s",
     handlers=[
         logging.StreamHandler(),
-        logging.FileHandler("stock_alarm.log", encoding="utf-8"),
+        logging.handlers.RotatingFileHandler(
+            _LOG_FILE, maxBytes=5 * 1024 * 1024, backupCount=3, encoding="utf-8"
+        ),
     ],
 )
 logger = logging.getLogger(__name__)
