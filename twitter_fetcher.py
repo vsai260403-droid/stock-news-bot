@@ -44,11 +44,7 @@ def _check_instance_health(instance: str, timeout: int = 6) -> bool:
     try:
         import requests as _req
         url = f"{instance.rstrip('/')}/elonmusk/rss"
-        r = _req.get(
-            url,
-            timeout=timeout,
-            headers={"User-Agent": "Mozilla/5.0 (compatible; StockAlarmBot/1.0)"},
-        )
+        r = _req.get(url, timeout=timeout, headers=_BROWSER_HEADERS)
         return r.status_code == 200 and "rss" in r.headers.get("content-type", "").lower()
     except Exception:
         return False
@@ -93,7 +89,18 @@ def get_healthy_instances() -> List[str]:
     return _healthy_instances
 
 
-# 잘 알려진 티커별 트위터 계정 기본값
+# Nitter 인스턴스 요청에 사용할 브라우저 헤더 (봇 차단 회피)
+_BROWSER_HEADERS = {
+    "User-Agent": (
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+        "AppleWebKit/537.36 (KHTML, like Gecko) "
+        "Chrome/124.0.0.0 Safari/537.36"
+    ),
+    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+    "Accept-Language": "en-US,en;q=0.5",
+    "Accept-Encoding": "gzip, deflate",
+    "Connection": "keep-alive",
+}
 KNOWN_ACCOUNTS: Dict[str, List[str]] = {
     "TSLA": ["Tesla", "elonmusk"],
     "AAPL": ["Apple", "tim_cook"],
@@ -142,11 +149,7 @@ def _try_fetch_rss(
     try:
         feed = feedparser.parse(
             url,
-            request_headers={
-                "User-Agent": (
-                    "Mozilla/5.0 (compatible; StockAlarmBot/1.0)"
-                )
-            },
+            request_headers=_BROWSER_HEADERS,
         )
         # bozo=True + entries 없으면 파싱 실패
         if feed.bozo and not feed.entries:
@@ -193,8 +196,7 @@ def probe_instance(instance: str, username: str, timeout: int = 8) -> Dict[str, 
     result: Dict[str, Any] = {"url": url, "http_status": None, "content_type": None,
                                "entries": 0, "bozo": None, "error": None}
     try:
-        r = _req.get(url, timeout=timeout,
-                     headers={"User-Agent": "Mozilla/5.0 (compatible; StockAlarmBot/1.0)"})
+        r = _req.get(url, timeout=timeout, headers=_BROWSER_HEADERS)
         result["http_status"] = r.status_code
         result["content_type"] = r.headers.get("content-type", "")[:60]
         if r.status_code != 200:
