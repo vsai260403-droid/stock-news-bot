@@ -306,6 +306,7 @@ def check_tweets(config: dict, seen: Set[str], initial: bool = False) -> int:
             for item in items:
                 item_id = item["id"]
                 if not item_id or item_id in seen:
+                    logger.info("[%s] @%s 이미 seen skip (id=%s)", ticker, item.get("username"), item_id)
                     continue
                 seen.add(item_id)
                 if not initial:
@@ -318,6 +319,8 @@ def check_tweets(config: dict, seen: Set[str], initial: bool = False) -> int:
                             item["title"][:60],
                         )
                         time.sleep(0.5)
+                else:
+                    logger.info("[%s] @%s 초기 로드 skip (initial=True, id=%s)", ticker, item.get("username"), item_id)
 
     # 티커 없는 전용 계정 (_GLOBAL_) — monitor_twitter ON/OFF와 무관하게 항상 체크
     global_accounts: list = config.get("twitter_accounts", {}).get("_GLOBAL_", [])
