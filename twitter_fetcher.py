@@ -10,7 +10,6 @@ Twitter API 키 불필요.
 import logging
 import re
 import time
-import threading
 from typing import Any, Dict, List, Optional
 
 logger = logging.getLogger(__name__)
@@ -58,11 +57,7 @@ _BROWSER_HEADERS = {
     "Connection": "keep-alive",
 }
 
-# 런타임 상태 체크 캐시
-_healthy_instances: List[str] = []
-_last_health_check: float = 0.0
-_HEALTH_CHECK_INTERVAL: float = 3600.0
-_health_lock = threading.Lock()
+# (건강 체크 제거됨 — 매번 전체 목록 순서대로 시도)
 
 # 브라우저 헤더 (봇 차단 회피) — 모든 함수에서 사용하므로 여기 정의
 _BROWSER_HEADERS = {
@@ -78,98 +73,10 @@ _BROWSER_HEADERS = {
 }
 
 
-def _check_instance_health(instance: str, timeout: int = 6) -> bool:
-    """인스턴스가 RSS 응답을 주는지 확인합니다 (twitter 계정으로 테스트 - 차단 가능성 낮음)."""
-    try:
-        import requests as _req
-        # elonmusk 대신 twitter 공식 계정 사용 (차단 가능성 낮음)
-        url = f"{instance.rstrip('/')}/twitter/rss"
-        r = _req.get(url, timeout=timeout, headers=_BROWSER_HEADERS)
-        # content-type: rss, xml, text/xml, application/rss+xml 모두 허용
-        ct = r.headers.get("content-type", "").lower()
-        ok = r.status_code == 200 and ("rss" in ct or "xml" in ct)
-        logger.debug("[Health] %s → %s (status=%d, ct=%s)", instance, "OK" if ok else "FAIL", r.status_code, ct[:30])
-        return ok
-    except Exception as e:
-        logger.debug("[Health] %s → FAIL (%s)", instance, e)
-        return False
-
-
-def _check_rsshub_health(instance: str, timeout: int = 6) -> bool:
-    """RSSHub 인스턴스가 응답을 주는지 확인합니다."""
-    try:
-        import requests as _req
-        # elonmusk 대신 twitter 공식 계정 사용
-        url = f"{instance.rstrip('/')}/twitter/user/twitter"
-        r = _req.get(url, timeout=timeout, headers=_BROWSER_HEADERS)
-        # content-type: rss, xml, text/xml, application/rss+xml 모두 허용
-        ct = r.headers.get("content-type", "").lower()
-        ok = r.status_code == 200 and ("rss" in ct or "xml" in ct)
-        logger.debug("[Health] RSSHub %s → %s (status=%d)", instance, "OK" if ok else "FAIL", r.status_code)
-        return ok
-    except Exception as e:
-        logger.debug("[Health] RSSHub %s → FAIL (%s)", instance, e)
-        return False
-
-
-def _refresh_healthy_instances() -> List[str]:
-    """전체 후보 목록을 병렬 체크해 살아있는 인스턴스 목록을 갱신합니다."""
-    import concurrent.futures
-
-    all_candidates = [
-        ("rsshub", inst) for inst in _RSSHUB_INSTANCES
-    ] + [
-        ("nitter", inst) for inst in _NITTER_INSTANCES
-    ]
-    logger.info("[Twitter] 인스턴스 상태 체크 중 (RSSHub %d개 + Nitter %d개)...",
-                len(_RSSHUB_INSTANCES), len(_NITTER_INSTANCES))
-
-    alive_rsshub, alive_nitter = [], []
-    with concurrent.futures.ThreadPoolExecutor(max_workers=8) as pool:
-        futures = {
-            pool.submit(
-                _check_rsshub_health if kind == "rsshub" else _check_instance_health,
-                inst
-            ): (kind, inst)
-            for kind, inst in all_candidates
-        }
-        for future in concurrent.futures.as_completed(futures):
-            kind, inst = futures[future]
-            try:
-                if future.result():
-                    if kind == "rsshub":
-                        alive_rsshub.append(inst)
-                    else:
-                        alive_nitter.append(inst)
-            except Exception:
-                pass
-
-    # 원래 순서 유지, RSSHub 먼저
-    alive_rsshub = [i for i in _RSSHUB_INSTANCES if i in alive_rsshub]
-    alive_nitter = [i for i in _NITTER_INSTANCES if i in alive_nitter]
-    result = alive_rsshub + alive_nitter
-    logger.info("[Twitter] 사용 가능: RSSHub %d개 %s | Nitter %d개 %s",
-                len(alive_rsshub), alive_rsshub or "(없음)",
-                len(alive_nitter), alive_nitter or "(없음)")
-    return result
-
-
 def get_healthy_instances() -> List[str]:
-    """살아있는 인스턴스 목록을 반환합니다. 1시간마다 자동 갱신."""
-    global _healthy_instances, _last_health_check
-    now = time.time()
-    with _health_lock:
-        if now - _last_health_check >= _HEALTH_CHECK_INTERVAL or not _healthy_instances:
-            _healthy_instances = _refresh_healthy_instances()
-            _last_health_check = now
-        # 건강 체크 결과와 무관하게 nitter.net은 항상 포함 (가장 안정적)
-        if "https://nitter.net" not in _healthy_instances:
-            _healthy_instances = ["https://nitter.net"] + _healthy_instances
-        if not _healthy_instances:
-            # 모두 실패 시 전체 목록 폴백
-            logger.warning("[Twitter] 모든 인스턴스 다운 — 전체 목록으로 폴백")
-            _healthy_instances = list(_NITTER_INSTANCES) + list(_RSSHUB_INSTANCES)
-    return _healthy_instances
+    """사용할 인스턴스 목록을 반환합니다. Nitter 우선, 그 다음 RSSHub."""
+    # 건강 체크 없이 매번 전체 목록 반환 (nitter.net이 맨 앞)
+    return list(_NITTER_INSTANCES) + list(_RSSHUB_INSTANCES)
 
 
 KNOWN_ACCOUNTS: Dict[str, List[str]] = {
@@ -344,8 +251,6 @@ def fetch_twitter_timeline(
         time.sleep(0.3)
 
     logger.warning("[@%s] 모든 인스턴스에서 수집 실패", username)
-    global _last_health_check
-    _last_health_check = 0.0  # 다음 체크에서 목록 강제 갱신
     return []
 
 
