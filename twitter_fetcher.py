@@ -133,8 +133,12 @@ def _try_fetch_rss_nitter(
             return []
         feed = feedparser.parse(r.text)
         if feed.bozo and not feed.entries:
+            logger.info("Nitter [%s] @%s 파싱 실패 (bozo=%s)", instance, username, feed.bozo_exception)
             return []
-        return _parse_feed_entries(feed, username)
+        entries = _parse_feed_entries(feed, username)
+        if not entries:
+            logger.info("Nitter [%s] @%s 트윗 0개", instance, username)
+        return entries
     except Exception as e:
         logger.info("Nitter [%s] @%s 실패: %s", instance, username, e)
         return []
@@ -159,10 +163,15 @@ def _try_fetch_rss_rsshub(
             return []
         feed = feedparser.parse(r.text)
         if feed.bozo and not feed.entries:
+            logger.info("RSSHub [%s] @%s 파싱 실패 (bozo=%s)", instance, username, feed.bozo_exception)
             return []
-        return _parse_feed_entries(feed, username)
+        entries = _parse_feed_entries(feed, username)
+        if not entries:
+            logger.info("RSSHub [%s] @%s 트윗 0개", instance, username)
+        return entries
     except Exception as e:
         logger.info("RSSHub [%s] @%s 실패: %s", instance, username, e)
+        return []
         return []
 
 
