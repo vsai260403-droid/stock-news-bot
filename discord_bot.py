@@ -18,8 +18,10 @@ discord_bot.py - Discord Bot을 통한 티커 관리 명령어
   !twitter-on         — 트위터 알람 활성화
   !twitter-off        — 트위터 알람 비활성화
   !twitter-list       — 티커별 등록 트위터 계정 확인
-  !twitter-add TSLA @elonmusk @Tesla  — 계정 추가
-  !twitter-remove TSLA @elonmusk      — 계정 제거
+  !twitter-add TSLA @elonmusk @Tesla  — 티커 연동 계정 추가
+  !twitter-remove TSLA @elonmusk      — 티커 연동 계정 제거
+  !twitter-follow @elonmusk @nvidia   — 티커 없이 계정 단독 추가
+  !twitter-unfollow @elonmusk         — 단독 계정 제거
 
   !set-gemini-key AIza...  — Gemini API 키 (트위터 자동 탐색)
   !set-openai-key sk-...   — OpenAI API 키 (AI 요약)
@@ -282,19 +284,22 @@ def _make_bot(prefix: str):
         accounts = cfg.get("twitter_accounts", {})
         tickers = cfg.get("tickers", [])
         registered = [t for t in tickers if t in accounts and accounts[t]]
-        if registered:
+        global_accs = accounts.get("_GLOBAL_", [])
+        if registered or global_accs:
+            parts = [
+                f"{t}({', '.join('@'+a for a in accounts[t])})"
+                for t in registered
+            ]
+            if global_accs:
+                parts.append(f"전용({', '.join('@'+a for a in global_accs)})")
             await ctx.send(
                 f"🐦 트위터 알람 **ON**\n"
-                f"모니터링 계정: " +
-                ", ".join(
-                    f"{t}({', '.join('@'+a for a in accounts[t])})"
-                    for t in registered
-                )
+                f"모니터링 계정: " + ", ".join(parts)
             )
         else:
             await ctx.send(
                 "🐦 트위터 알람 **ON**\n"
-                "⚠️ 등록된 트위터 계정이 없습니다. `!twitter-add TSLA @elonmusk` 으로 추가하세요."
+                "⚠️ 등록된 트위터 계정이 없습니다. `!twitter-add TSLA @elonmusk` 또는 `!twitter-follow @account` 으로 추가하세요."
             )
 
     # ── !twitter-off ──────────────────────────────────────────────────────────
@@ -323,10 +328,70 @@ def _make_bot(prefix: str):
 
         lines = [f"🐦 트위터 알람: {status_str}"]
         for ticker, accs in sorted(accounts.items()):
+            if ticker == "_GLOBAL_":
+                continue  # 아래 별도 표시
             mark = " *(티커 미등록)*" if ticker not in tickers else ""
             acc_str = ", ".join(f"[@{a}](https://twitter.com/{a})" for a in accs)
             lines.append(f"• **{ticker}**{mark}: {acc_str}")
+        global_accs = accounts.get("_GLOBAL_", [])
+        if global_accs:
+            acc_str = ", ".join(f"[@{a}](https://twitter.com/{a})" for a in global_accs)
+            lines.append(f"• **[전용]** (티커 없음): {acc_str}")
         await ctx.send("\n".join(lines))
+
+    # ── !twitter-follow (티커 없는 전용 계정 추가) ───────────────────────────
+    @bot.command(name="twitter-follow")
+    async def cmd_twitter_follow(ctx, *usernames):
+        if not usernames:
+            await ctx.send("사용법: `!twitter-follow @elonmusk @nvidia`")
+            return
+        cfg = _load_config()
+        accounts: dict = cfg.setdefault("twitter_accounts", {})
+        existing: list = accounts.setdefault("_GLOBAL_", [])
+        added = []
+        for raw in usernames:
+            username = raw.lstrip("@").strip()
+            if not username:
+                continue
+            if username not in existing:
+                existing.append(username)
+                added.append(username)
+        if added:
+            _save_config(cfg)
+            await ctx.send(
+                f"✅ 전용 트위터 계정 추가: {', '.join('@'+a for a in added)}\n"
+                f"(티커 연동 없음 — 트윗 자체 알람)"
+            )
+        else:
+            await ctx.send("⚠️ 추가할 새 계정이 없습니다. (이미 등록됨)")
+
+    # ── !twitter-unfollow (티커 없는 전용 계정 제거) ──────────────────────────
+    @bot.command(name="twitter-unfollow")
+    async def cmd_twitter_unfollow(ctx, *usernames):
+        if not usernames:
+            await ctx.send("사용법: `!twitter-unfollow @elonmusk`")
+            return
+        cfg = _load_config()
+        accounts: dict = cfg.get("twitter_accounts", {})
+        existing: list = accounts.get("_GLOBAL_", [])
+        removed, not_found = [], []
+        for raw in usernames:
+            username = raw.lstrip("@").strip()
+            if username in existing:
+                existing.remove(username)
+                removed.append(username)
+            else:
+                not_found.append(username)
+        if removed:
+            if not existing:
+                accounts.pop("_GLOBAL_", None)
+            _save_config(cfg)
+        lines = []
+        if removed:
+            lines.append(f"🗑️ 전용 트위터 계정 제거: {', '.join('@'+a for a in removed)}")
+        if not_found:
+            lines.append(f"⚠️ 등록되지 않은 계정: {', '.join('@'+a for a in not_found)}")
+        await ctx.send("\n".join(lines) or "제거할 계정이 없습니다.")
 
     # ── !twitter-add ──────────────────────────────────────────────────────────
     @bot.command(name="twitter-add")
@@ -685,8 +750,10 @@ def _make_bot(prefix: str):
             "`!twitter-on` — 트위터 알람 활성화\n"
             "`!twitter-off` — 트위터 알람 비활성화\n"
             "`!twitter-list` — 티커별 트위터 계정 목록\n"
-            "`!twitter-add TSLA @elonmusk @Tesla` — 계정 추가\n"
-            "`!twitter-remove TSLA @elonmusk` — 계정 제거\n"
+            "`!twitter-add TSLA @elonmusk @Tesla` — 티커 연동 계정 추가\n"
+            "`!twitter-remove TSLA @elonmusk` — 티커 연동 계정 제거\n"
+            "`!twitter-follow @elonmusk` — 티커 없이 계정 단독 추가\n"
+            "`!twitter-unfollow @elonmusk` — 단독 계정 제거\n"
             "\n"
             "**[ 설정 ]**\n"
             "`!set-gemini-key AIza...` — Gemini API 키 (트위터 자동 탐색용, DM 권장)\n"

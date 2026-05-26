@@ -301,6 +301,7 @@ def check_tweets(config: dict, seen: Set[str], initial: bool = False) -> int:
     tickers = config.get("tickers", [])
     count = 0
 
+    # 티커 연동 계정
     for ticker in tickers:
         items = fetch_all_tweets(ticker, config)
         for item in items:
@@ -318,6 +319,33 @@ def check_tweets(config: dict, seen: Set[str], initial: bool = False) -> int:
                         item["title"][:60],
                     )
                     time.sleep(0.5)  # Rate limit 방지
+
+    # 티커 없는 전용 계정 (_GLOBAL_)
+    global_accounts: list = config.get("twitter_accounts", {}).get("_GLOBAL_", [])
+    if global_accounts:
+        from twitter_fetcher import fetch_twitter_timeline
+        nitter_instances = config.get("nitter_instances", None)
+        max_age_hours = config.get("tweet_max_age_hours", 24)
+        cutoff_ts = int(time.time()) - (max_age_hours * 3600) if max_age_hours > 0 else 0
+        for username in global_accounts:
+            tweets = fetch_twitter_timeline(username, nitter_instances)
+            for tweet in tweets:
+                if cutoff_ts and tweet.get("publish_time", 0) < cutoff_ts:
+                    continue
+                tweet["ticker"] = ""  # 티커 없음
+                item_id = tweet["id"]
+                if not item_id or item_id in seen:
+                    continue
+                seen.add(item_id)
+                if not initial:
+                    if send_tweet_alert(webhook_url, tweet):
+                        count += 1
+                        logger.info(
+                            "[GLOBAL] 트윗 알람 전송: @%s — %s",
+                            username,
+                            tweet["title"][:60],
+                        )
+                        time.sleep(0.5)
 
     return count
 
