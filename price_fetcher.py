@@ -5,7 +5,7 @@ API 키 불필요.
 """
 import logging
 import time
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 import requests
 
@@ -35,6 +35,33 @@ def _derive_market_state(meta: Dict[str, Any], now_ts: Optional[int] = None) -> 
     return "CLOSED"
 
 
+def _latest_chart_price(result: Dict[str, Any]) -> Tuple[Optional[float], Optional[int]]:
+    """1분봉 chart 데이터에서 가장 최근 non-null close와 timestamp를 반환합니다.
+
+    includePrePost=true일 때 meta.regularMarketPrice는 정규장 마지막 가격일 수 있어
+    프리장/애프터장 현재가로 부정확할 수 있습니다. 따라서 quote.close 배열의
+    마지막 유효값을 우선 사용합니다.
+    """
+    timestamps = result.get("timestamp") or []
+    quote_list = result.get("indicators", {}).get("quote", [])
+    if not quote_list:
+        return None, None
+
+    closes = quote_list[0].get("close") or []
+    for idx in range(len(closes) - 1, -1, -1):
+        close = closes[idx]
+        if close is None:
+            continue
+        try:
+            price = float(close)
+        except (TypeError, ValueError):
+            continue
+        ts = timestamps[idx] if idx < len(timestamps) else None
+        return price, int(ts) if isinstance(ts, (int, float)) else None
+
+    return None, None
+
+
 def fetch_price(ticker: str) -> Optional[Dict[str, Any]]:
     """Yahoo Finance에서 현재 주가 정보를 가져옵니다.
 
@@ -57,10 +84,14 @@ def fetch_price(ticker: str) -> Optional[Dict[str, Any]]:
             logger.warning("[%s] Yahoo chart 결과 없음", ticker)
             return None
 
-        meta = results[0].get("meta", {})
-        price = meta.get("regularMarketPrice")
+        result = results[0]
+        meta = result.get("meta", {})
+
+        latest_price, latest_ts = _latest_chart_price(result)
+        meta_price = meta.get("regularMarketPrice")
+        price = latest_price if latest_price is not None else meta_price
         if price is None:
-            logger.warning("[%s] regularMarketPrice 없음", ticker)
+            logger.warning("[%s] chart close/regularMarketPrice 없음", ticker)
             return None
 
         prev_close = (
@@ -73,6 +104,13 @@ def fetch_price(ticker: str) -> Optional[Dict[str, Any]]:
 
         raw_market_state = meta.get("marketState")
         market_state = raw_market_state or _derive_market_state(meta)
+        timestamp = latest_ts or meta.get("regularMarketTime") or int(time.time())
+
+        if latest_price is not None and meta_price is not None:
+            logger.debug(
+                "[%s] price source=chart_close %.4f (regularMarketPrice %.4f)",
+                ticker, price, float(meta_price),
+            )
 
         return {
             "ticker": ticker.upper(),
@@ -82,9 +120,11 @@ def fetch_price(ticker: str) -> Optional[Dict[str, Any]]:
             "change": change,
             "change_pct": change_pct,
             "currency": meta.get("currency", "USD"),
-            "timestamp": meta.get("regularMarketTime", int(time.time())),
+            "timestamp": timestamp,
             "market_state": market_state,  # PRE / REGULAR / POST / CLOSED / UNKNOWN
             "raw_market_state": raw_market_state,
+            "price_source": "chart_close" if latest_price is not None else "regularMarketPrice",
+            "regular_market_price": meta_price,
         }
     except Exception as e:
         logger.error("[%s] 주가 조회 실패: %s", ticker, e)
