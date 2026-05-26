@@ -196,13 +196,19 @@ def _try_fetch_rss_nitter(
     """Nitter 인스턴스에서 RSS를 가져옵니다."""
     try:
         import feedparser
+        import requests as _req
     except ImportError:
-        logger.warning("feedparser 미설치 → pip install feedparser")
+        logger.warning("feedparser 또는 requests 미설치")
         return []
 
     url = f"{instance.rstrip('/')}/{username}/rss"
     try:
-        feed = feedparser.parse(url, request_headers=_BROWSER_HEADERS)
+        # requests로 직접 가져와서 feedparser에 텍스트 전달 (헤더 확실히 적용)
+        r = _req.get(url, timeout=timeout, headers=_BROWSER_HEADERS)
+        if r.status_code != 200:
+            logger.info("Nitter [%s] @%s HTTP %d", instance, username, r.status_code)
+            return []
+        feed = feedparser.parse(r.text)
         if feed.bozo and not feed.entries:
             return []
         return _parse_feed_entries(feed, username)
@@ -217,12 +223,18 @@ def _try_fetch_rss_rsshub(
     """RSSHub 인스턴스에서 RSS를 가져옵니다."""
     try:
         import feedparser
+        import requests as _req
     except ImportError:
         return []
 
     url = f"{instance.rstrip('/')}/twitter/user/{username}"
     try:
-        feed = feedparser.parse(url, request_headers=_BROWSER_HEADERS)
+        # requests로 직접 가져와서 feedparser에 텍스트 전달 (헤더 확실히 적용)
+        r = _req.get(url, timeout=timeout, headers=_BROWSER_HEADERS)
+        if r.status_code != 200:
+            logger.info("RSSHub [%s] @%s HTTP %d", instance, username, r.status_code)
+            return []
+        feed = feedparser.parse(r.text)
         if feed.bozo and not feed.entries:
             return []
         return _parse_feed_entries(feed, username)
@@ -265,8 +277,8 @@ def probe_instance(instance: str, username: str, timeout: int = 8) -> Dict[str, 
     import requests as _req
     import feedparser as _fp
 
-    # RSSHub vs Nitter URL 패턴 자동 판단 (URL에 rsshub 포함 여부로 판단)
-    is_rsshub = "rsshub" in instance.lower() or "hub.slarker" in instance.lower()
+    # URL 패턴으로 RSSHub vs Nitter 자동 판단
+    is_rsshub = _is_rsshub_instance(instance)
     if is_rsshub:
         url = f"{instance.rstrip('/')}/twitter/user/{username}"
     else:
@@ -289,6 +301,11 @@ def probe_instance(instance: str, username: str, timeout: int = 8) -> Dict[str, 
     return result
 
 
+def _is_rsshub_instance(instance: str) -> bool:
+    """인스턴스가 RSSHub인지 URL 패턴으로 판단합니다."""
+    return "rsshub" in instance.lower() or "hub.slarker" in instance.lower()
+
+
 def fetch_twitter_timeline(
     username: str,
     nitter_instances: Optional[List[str]] = None,
@@ -300,12 +317,13 @@ def fetch_twitter_timeline(
     instances = nitter_instances or get_healthy_instances()
 
     for instance in instances:
-        if instance in _RSSHUB_INSTANCES:
+        # URL 패턴으로 RSSHub vs Nitter 판단 (리스트 비교 대신)
+        if _is_rsshub_instance(instance):
             result = _try_fetch_rss_rsshub(instance, username)
         else:
             result = _try_fetch_rss_nitter(instance, username)
         if result:
-            logger.debug("[@%s] %d개 트윗 수집 (%s)", username, len(result), instance)
+            logger.info("[@%s] %d개 트윗 수집 성공 (%s)", username, len(result), instance)
             return result
         time.sleep(0.3)
 
