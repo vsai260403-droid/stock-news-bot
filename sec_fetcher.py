@@ -151,34 +151,51 @@ def fetch_filing_text(filing_link: str, max_chars: int = 3000,
     # 실적발표(2.02) 8-K는 press release가 Exhibit 99.1에 있어 내용이 더 풍부함
     exhibit_text = ""
     if cik_int and accession_clean:
-        idx_url = (
+        # accession_clean (18자리) → accession_dashed (예: 0001800227-26-000034)
+        acc = accession_clean
+        accession_dashed = f"{acc[:10]}-{acc[10:12]}-{acc[12:]}"
+        base_url = (
             f"https://www.sec.gov/Archives/edgar/data/"
             f"{cik_int}/{accession_clean}/"
         )
+        # 제대로 된 EDGAR 파일 목록 페이지 (디렉터리 URL이 아닌 index.htm)
+        index_htm_url = base_url + accession_dashed + "-index.htm"
         try:
-            idx_resp = requests.get(idx_url, headers=_HEADERS, timeout=10)
+            idx_resp = requests.get(index_htm_url, headers=_HEADERS, timeout=10)
             if idx_resp.status_code == 200:
-                hrefs = _re.findall(
-                    r'href="([^"]+\.htm[l]?)"', idx_resp.text, _re.IGNORECASE
+                # index.htm 에는 <tr>당 Seq/Description/Document(href)/Type 컬럼이 있음
+                # EX-99가 포함된 행에서 href 추출
+                rows = _re.findall(
+                    r"<tr[^>]*>(.*?)</tr>", idx_resp.text, _re.DOTALL | _re.IGNORECASE
                 )
-                for href in hrefs:
-                    name = href.lower()
-                    # Exhibit 99 계열만 탐색 (press release)
-                    if not ("ex99" in name or "ex-99" in name
-                            or "exhibit99" in name or "press" in name):
-                        continue
-                    # 상대경로 → 절대경로 변환
+                exhibit_hrefs = []
+                for row in rows:
+                    if _re.search(r"EX-99", row, _re.IGNORECASE):
+                        found = _re.findall(r'href="([^"]+\.htm[l]?)"', row, _re.IGNORECASE)
+                        exhibit_hrefs.extend(found)
+
+                # fallback: href 이름에 ex99/press 패턴 검색
+                if not exhibit_hrefs:
+                    all_hrefs = _re.findall(r'href="([^"]+\.htm[l]?)"', idx_resp.text, _re.IGNORECASE)
+                    for h in all_hrefs:
+                        n = h.lower()
+                        if "ex99" in n or "ex-99" in n or "exhibit99" in n or "press" in n:
+                            exhibit_hrefs.append(h)
+
+                for href in exhibit_hrefs[:3]:
                     if href.startswith("http"):
                         url = href
                     elif href.startswith("/"):
                         url = f"https://www.sec.gov{href}"
                     else:
-                        url = idx_url + href
+                        url = base_url + href
                     raw = _fetch_clean(url)
                     if len(raw) > 300:
                         exhibit_text = _extract_body(raw)
                         logger.debug("SEC Exhibit 읽기 성공: %s (%d자)", url, len(exhibit_text))
                         break
+            else:
+                logger.debug("SEC index.htm 접근 실패: %s (status=%d)", index_htm_url, idx_resp.status_code)
         except Exception as e:
             logger.debug("SEC 인덱스 탐색 실패: %s", e)
 
