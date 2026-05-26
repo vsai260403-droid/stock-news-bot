@@ -294,33 +294,32 @@ def check_sec(config: dict, seen: Set[str], initial: bool = False) -> int:
 # ─── 트위터 체크 ──────────────────────────────────────────────────────────────
 def check_tweets(config: dict, seen: Set[str], initial: bool = False) -> int:
     """등록된 트위터 계정에서 새 트윗을 확인하고 Discord로 전송합니다."""
-    if not config.get("monitor_twitter", False):
-        return 0
-
     webhook_url = config["discord_webhook_url"]
-    tickers = config.get("tickers", [])
+    twitter_on = config.get("monitor_twitter", False)
     count = 0
 
-    # 티커 연동 계정
-    for ticker in tickers:
-        items = fetch_all_tweets(ticker, config)
-        for item in items:
-            item_id = item["id"]
-            if not item_id or item_id in seen:
-                continue
-            seen.add(item_id)
-            if not initial:
-                if send_tweet_alert(webhook_url, item):
-                    count += 1
-                    logger.info(
-                        "[%s] 트윗 알람 전송: @%s — %s",
-                        ticker,
-                        item["username"],
-                        item["title"][:60],
-                    )
-                    time.sleep(0.5)  # Rate limit 방지
+    # 티커 연동 계정 (트위터 알람 ON일 때만)
+    if twitter_on:
+        tickers = config.get("tickers", [])
+        for ticker in tickers:
+            items = fetch_all_tweets(ticker, config)
+            for item in items:
+                item_id = item["id"]
+                if not item_id or item_id in seen:
+                    continue
+                seen.add(item_id)
+                if not initial:
+                    if send_tweet_alert(webhook_url, item):
+                        count += 1
+                        logger.info(
+                            "[%s] 트윗 알람 전송: @%s — %s",
+                            ticker,
+                            item["username"],
+                            item["title"][:60],
+                        )
+                        time.sleep(0.5)
 
-    # 티커 없는 전용 계정 (_GLOBAL_)
+    # 티커 없는 전용 계정 (_GLOBAL_) — monitor_twitter ON/OFF와 무관하게 항상 체크
     global_accounts: list = config.get("twitter_accounts", {}).get("_GLOBAL_", [])
     if global_accounts:
         from twitter_fetcher import fetch_twitter_timeline
@@ -389,10 +388,22 @@ def main() -> None:
         account_summary = ", ".join(
             f"{t}: {', '.join('@' + u for u in accs)}"
             for t, accs in twitter_accounts.items()
-            if t in config.get("tickers", [])
+            if t != "_GLOBAL_" and t in config.get("tickers", [])
         )
+        global_accs = twitter_accounts.get("_GLOBAL_", [])
+        if global_accs:
+            global_summary = "전용: " + ", ".join("@" + u for u in global_accs)
+            account_summary = ", ".join(filter(None, [account_summary, global_summary]))
         logger.info("트위터 모니터링: ON  (%s)", account_summary or "계정 없음")
-        logger.info("트위터 체크 주기: %d초", twitter_interval)
+        logger.info("트윗 체크 주기: %d초", twitter_interval)
+    else:
+        # monitor_twitter OFF여도 _GLOBAL_ 전용 계정이 있으면 로그 표시
+        global_accs = config.get("twitter_accounts", {}).get("_GLOBAL_", [])
+        if global_accs:
+            logger.info(
+                "트위터 모니터링: OFF  (전용 팔로우: %s)",
+                ", ".join("@" + u for u in global_accs),
+            )
     threshold = config.get("price_alert_threshold_pct", 5.0)
     logger.info("주가 변동 알람: %.1f%% 이상 시 알람  (체크 주기: %d초)", threshold, price_interval)
     logger.info("=" * 60)
@@ -462,8 +473,8 @@ def main() -> None:
     schedule.every(news_interval).seconds.do(news_job)
     if monitor_sec:
         schedule.every(sec_interval).seconds.do(sec_job)
-    if monitor_twitter:
-        schedule.every(twitter_interval).seconds.do(twitter_job)
+    # twitter_job은 항상 스케줄 등록 (_GLOBAL_ 전용 계정은 monitor_twitter 무관)
+    schedule.every(twitter_interval).seconds.do(twitter_job)
     if monitor_price:
         schedule.every(price_interval).seconds.do(price_job)
 
