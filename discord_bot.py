@@ -22,6 +22,8 @@ discord_bot.py - Discord Bot을 통한 티커 관리 명령어
   !twitter-remove TSLA @elonmusk      — 티커 연동 계정 제거
   !twitter-follow @elonmusk @nvidia   — 티커 없이 계정 단독 추가
   !twitter-unfollow @elonmusk         — 단독 계정 제거
+  !twitter-follows                    — 단독 팔로우 계정 목록
+  !twitter-unfollow-all               — 단독 팔로우 계정 전체 제거
 
   !set-gemini-key AIza...  — Gemini API 키 (트위터 자동 탐색)
   !set-openai-key sk-...   — OpenAI API 키 (AI 요약)
@@ -393,6 +395,44 @@ def _make_bot(prefix: str):
             lines.append(f"⚠️ 등록되지 않은 계정: {', '.join('@'+a for a in not_found)}")
         await ctx.send("\n".join(lines) or "제거할 계정이 없습니다.")
 
+    # ── !twitter-follows (전용 계정 목록 조회) ────────────────────────────────
+    @bot.command(name="twitter-follows")
+    async def cmd_twitter_follows(ctx):
+        cfg = _load_config()
+        global_accs: list = cfg.get("twitter_accounts", {}).get("_GLOBAL_", [])
+        tw_on = cfg.get("monitor_twitter", False)
+        status_str = "🟢 ON" if tw_on else "🔴 OFF"
+        if not global_accs:
+            await ctx.send(
+                f"🐦 전용 팔로우 계정: {status_str}\n"
+                "등록된 계정 없음. `!twitter-follow @elonmusk` 으로 추가하세요."
+            )
+            return
+        acc_lines = "\n".join(
+            f"{i+1}. [@{a}](https://twitter.com/{a})" for i, a in enumerate(global_accs)
+        )
+        await ctx.send(
+            f"🐦 전용 팔로우 계정 ({len(global_accs)}개) — 알람: {status_str}\n"
+            f"{acc_lines}\n"
+            f"전체 제거: `!twitter-unfollow-all`"
+        )
+
+    # ── !twitter-unfollow-all (전용 계정 전체 제거) ───────────────────────────
+    @bot.command(name="twitter-unfollow-all")
+    async def cmd_twitter_unfollow_all(ctx):
+        cfg = _load_config()
+        accounts: dict = cfg.get("twitter_accounts", {})
+        global_accs: list = list(accounts.get("_GLOBAL_", []))
+        if not global_accs:
+            await ctx.send("⚠️ 제거할 전용 계정이 없습니다.")
+            return
+        accounts.pop("_GLOBAL_", None)
+        _save_config(cfg)
+        await ctx.send(
+            f"🗑️ 전용 팔로우 계정 전체 제거 ({len(global_accs)}개):\n"
+            + ", ".join(f"@{a}" for a in global_accs)
+        )
+
     # ── !twitter-add ──────────────────────────────────────────────────────────
     @bot.command(name="twitter-add")
     async def cmd_twitter_add(ctx, ticker: str = "", *usernames):
@@ -754,6 +794,8 @@ def _make_bot(prefix: str):
             "`!twitter-remove TSLA @elonmusk` — 티커 연동 계정 제거\n"
             "`!twitter-follow @elonmusk` — 티커 없이 계정 단독 추가\n"
             "`!twitter-unfollow @elonmusk` — 단독 계정 제거\n"
+            "`!twitter-follows` — 단독 팔로우 계정 목록\n"
+            "`!twitter-unfollow-all` — 단독 팔로우 계정 전체 제거\n"
             "\n"
             "**[ 설정 ]**\n"
             "`!set-gemini-key AIza...` — Gemini API 키 (트위터 자동 탐색용, DM 권장)\n"
