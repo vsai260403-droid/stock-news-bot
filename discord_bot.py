@@ -410,9 +410,9 @@ def _make_bot(prefix: str):
         from twitter_fetcher import _RSSHUB_INSTANCES, _NITTER_INSTANCES, probe_instance
         import asyncio
 
-        cfg = _load_config()
-        custom = cfg.get("nitter_instances")
-        instances = custom or (_RSSHUB_INSTANCES + _NITTER_INSTANCES)
+        # 항상 RSSHub 먼저 + Nitter 전체를 테스트 (config 무시)
+        instances = list(_RSSHUB_INSTANCES) + list(_NITTER_INSTANCES)
+        await ctx.send(f"🔍 **@{username}** 진단 중 (RSSHub {len(_RSSHUB_INSTANCES)}개 + Nitter {len(_NITTER_INSTANCES)}개)...")
 
         loop = asyncio.get_event_loop()
         lines = []
