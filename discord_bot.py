@@ -720,7 +720,11 @@ def _make_bot(prefix: str):
                 filing["ticker"] = ticker
                 if gemini_api_key and not filing.get("ai_summary"):
                     desc = filing.get("description") or filing.get("form_type", "")
-                    body = fetch_filing_text(filing.get("link", ""))
+                    body = fetch_filing_text(
+                        filing.get("link", ""),
+                        cik_int=filing.get("_cik_int", 0),
+                        accession_clean=filing.get("_accession_clean", ""),
+                    )
                     if body:
                         summary_input = (
                             f"[{ticker}] SEC {filing.get('form_type','')} 공시 ({desc})\n\n"

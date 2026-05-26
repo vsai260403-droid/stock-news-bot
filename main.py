@@ -277,7 +277,11 @@ def check_sec(config: dict, seen: Set[str], initial: bool = False) -> int:
                 # AI 한글 요약 — 실제 문서 본문 기반
                 if gemini_api_key:
                     desc = item.get('description') or item.get('form_type', '')
-                    body = fetch_filing_text(item.get("link", ""))
+                    body = fetch_filing_text(
+                        item.get("link", ""),
+                        cik_int=item.get("_cik_int", 0),
+                        accession_clean=item.get("_accession_clean", ""),
+                    )
                     if body:
                         summary_input = (
                             f"[{ticker}] SEC {item.get('form_type','')} 공시 ({desc})\n\n"
