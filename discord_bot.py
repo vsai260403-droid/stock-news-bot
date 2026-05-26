@@ -404,11 +404,12 @@ def _make_bot(prefix: str):
         username = username.lstrip("@").strip()
         await ctx.send(f"🔍 **@{username}** Nitter 진단 중 (전체 인스턴스)...")
 
-        from twitter_fetcher import _ALL_NITTER_INSTANCES, probe_instance
+        from twitter_fetcher import _RSSHUB_INSTANCES, _NITTER_INSTANCES, probe_instance
         import asyncio
 
         cfg = _load_config()
-        instances = cfg.get("nitter_instances") or _ALL_NITTER_INSTANCES
+        custom = cfg.get("nitter_instances")
+        instances = custom or (_RSSHUB_INSTANCES + _NITTER_INSTANCES)
 
         loop = asyncio.get_event_loop()
         lines = []
@@ -416,15 +417,17 @@ def _make_bot(prefix: str):
 
         for inst in instances:
             info = await loop.run_in_executor(None, probe_instance, inst, username)
+            kind = info.get("type", "")
+            tag = f"[{kind}]" if kind else ""
             if info.get("error"):
-                lines.append(f"❌ `{inst}`  →  연결오류: {info['error']}")
+                lines.append(f"❌ {tag} `{inst}`  →  {info['error']}")
             elif info["http_status"] != 200:
-                lines.append(f"❌ `{inst}`  →  HTTP {info['http_status']}  ({info['content_type']})")
+                lines.append(f"❌ {tag} `{inst}`  →  HTTP {info['http_status']}")
             elif info["entries"] == 0:
-                bozo = " (파싱오류)" if info["bozo"] else " (엔트리 없음)"
-                lines.append(f"⚠️ `{inst}`  →  HTTP 200 but 트윗 0개{bozo}")
+                bozo = " (파싱오류)" if info["bozo"] else " (트윗 0개)"
+                lines.append(f"⚠️ {tag} `{inst}`  →  HTTP 200{bozo}")
             else:
-                lines.append(f"✅ `{inst}`  →  HTTP 200  트윗 {info['entries']}개")
+                lines.append(f"✅ {tag} `{inst}`  →  트윗 {info['entries']}개")
                 success_count += 1
 
         lines.append("")
