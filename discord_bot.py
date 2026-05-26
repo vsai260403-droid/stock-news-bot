@@ -713,9 +713,18 @@ def _make_bot(prefix: str):
                 return
 
             await ctx.send(f"📄 **{ticker}** 공시 {len(filings)}건 수집됨 — Discord 알람 전송 중...")
+            from news_fetcher import ai_summarize_news
+            gemini_api_key = cfg.get("gemini_api_key", "").strip()
             sent = 0
             for filing in filings[:3]:  # 최대 3건만 테스트 전송
                 filing["ticker"] = ticker
+                if gemini_api_key and not filing.get("ai_summary"):
+                    desc = filing.get("description") or filing.get("form_type", "")
+                    filing["ai_summary"] = ai_summarize_news(
+                        f"[{ticker}] SEC {filing.get('form_type','')} 공시 — {desc}",
+                        "SEC EDGAR",
+                        gemini_api_key,
+                    )
                 if send_sec_alert(webhook_url, filing):
                     sent += 1
             await ctx.send(f"✅ **{ticker}** SEC 테스트 완료 — {sent}/{min(len(filings), 3)}건 전송됨")
