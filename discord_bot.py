@@ -689,6 +689,36 @@ def _make_bot(prefix: str):
         _save_config(cfg)
         await ctx.send(f"✅ SEC 공시 체크 주기: **{val}초** ({val//60}분)로 변경됨 (봇 재시작 후 적용)")
 
+    # ── !sec-test (SEC 공시 수집 테스트 + 알람 전송) ─────────────────────────
+    @bot.command(name="sec-test")
+    async def cmd_sec_test(ctx, ticker: str = ""):
+        if not ticker:
+            await ctx.send("사용법: `!sec-test AAPL`\n최근 SEC 공시를 수집해서 실제 알람을 Discord로 전송합니다.")
+            return
+        ticker = ticker.upper().strip()
+        await ctx.send(f"🔍 **{ticker}** SEC 공시 수집 테스트 중...")
+        try:
+            from sec_fetcher import fetch_sec_filings
+            from discord_notifier import send_sec_alert
+
+            cfg = _load_config()
+            webhook_url = cfg.get("discord_webhook_url", "")
+
+            filings = fetch_sec_filings(ticker)
+            if not filings:
+                await ctx.send(f"⚠️ **{ticker}** SEC 공시 없음 (최근 30일 이내 공시가 없거나 CIK 매핑 실패)")
+                return
+
+            await ctx.send(f"📄 **{ticker}** 공시 {len(filings)}건 수집됨 — Discord 알람 전송 중...")
+            sent = 0
+            for filing in filings[:3]:  # 최대 3건만 테스트 전송
+                filing["ticker"] = ticker
+                if send_sec_alert(webhook_url, filing):
+                    sent += 1
+            await ctx.send(f"✅ **{ticker}** SEC 테스트 완료 — {sent}/{min(len(filings), 3)}건 전송됨")
+        except Exception as e:
+            await ctx.send(f"❌ SEC 테스트 실패: {e}")
+
     # ── !set-twitter-interval ─────────────────────────────────────────────────
     @bot.command(name="set-twitter-interval")
     async def cmd_set_twitter_interval(ctx, seconds: str = ""):
@@ -850,6 +880,9 @@ def _make_bot(prefix: str):
             "`!twitter-follows` — 단독 팔로우 계정 목록\n"
             "`!twitter-unfollow-all` — 단독 팔로우 계정 전체 제거\n"
             "`!twitter-test @elonmusk` — Nitter 수집 테스트\n"
+            "\n"
+            "**[ SEC 공시 ]**\n"
+            "`!sec-test AAPL` — SEC 공시 수집 테스트 (최근 공시 3건 실제 알람 전송)\n"
             "\n"
             "**[ 설정 ]**\n"
             "`!set-gemini-key AIza...` — Gemini API 키 (트위터 자동 탐색용, DM 권장)\n"
