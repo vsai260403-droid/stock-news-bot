@@ -404,6 +404,9 @@ def _make_bot(prefix: str):
         username = username.lstrip("@").strip()
         await ctx.send(f"🔍 **@{username}** Nitter 진단 중 (전체 인스턴스)...")
 
+        import importlib
+        import twitter_fetcher as _tw
+        importlib.reload(_tw)
         from twitter_fetcher import _RSSHUB_INSTANCES, _NITTER_INSTANCES, probe_instance
         import asyncio
 
