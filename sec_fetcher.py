@@ -106,7 +106,9 @@ def fetch_filing_text(filing_link: str, max_chars: int = 3000,
                       cik_int: int = 0, accession_clean: str = "") -> str:
     """
     SEC 공시의 실제 본문을 가져옵니다 (AI 요약용).
-    8-K의 경우 Exhibit 99.1(보도자료)을 우선 탐색합니다.
+    1단계: filing_link(primary document) 직접 읽기  → 주총·계약 등 본문 8-K에 효과적
+    2단계: EDGAR 인덱스에서 Exhibit 99.1 탐색        → 실적발표 press release에 효과적
+    둘 중 내용이 더 풍부한 것을 반환합니다.
     """
     import re as _re
 
@@ -116,92 +118,77 @@ def fetch_filing_text(filing_link: str, max_chars: int = 3000,
         text = _re.sub(r"\n{3,}", "\n\n", text)
         return text.strip()
 
-    # Exhibit 99.1 탐색 (cik_int + accession_clean 있을 때)
-    if cik_int and accession_clean:
+    def _extract_body(text: str) -> str:
+        """본문 시작 키워드부터 잘라낸다."""
+        for kw in ["ITEM ", "Item ", "PRESS RELEASE", "PURSUANT TO",
+                   "WHEREAS", "RESOLVED", "AGREEMENT", "Dear "]:
+            pos = text.find(kw)
+            if 0 < pos < 5000:
+                return text[pos:]
+        return text
+
+    def _fetch_clean(url: str) -> str:
+        """URL → HTML 가져와서 태그 제거 후 반환. 실패 시 빈 문자열."""
         try:
-            index_url = (
-                f"https://www.sec.gov/Archives/edgar/data/"
-                f"{cik_int}/{accession_clean}/{accession_clean[:18].replace('', '')}-index.htm"
-            )
-            # EDGAR 파일 목록 JSON API
-            json_url = (
-                f"https://data.sec.gov/Archives/edgar/data/"
-                f"{cik_int}/{accession_clean}/"
-            )
-            idx_resp = requests.get(
-                f"https://www.sec.gov/cgi-bin/browse-edgar?action=getcompany"
-                f"&action=getcompany",
-                headers=_HEADERS, timeout=10
-            )
+            r = requests.get(url, headers=_HEADERS, timeout=15)
+            if r.status_code == 200:
+                return _clean_html(r.text)
         except Exception:
             pass
+        return ""
 
-        # 파일 목록 가져오기 — EDGAR 인덱스
+    # ── 1단계: filing_link 직접 읽기 ───────────────────────────────────────
+    # filing_link = https://www.sec.gov/Archives/edgar/data/{cik}/{acc}/{file}
+    # 주총·계약·임원 변경 등 Exhibit 없는 8-K는 여기서 바로 성공함
+    primary_text = ""
+    if filing_link and "/Archives/edgar/" in filing_link:
+        raw = _fetch_clean(filing_link)
+        if len(raw) > 300:
+            primary_text = _extract_body(raw)
+            logger.debug("SEC primary 문서 읽기 성공: %d자", len(primary_text))
+
+    # ── 2단계: EDGAR 인덱스에서 Exhibit 99.1 탐색 ─────────────────────────
+    # 실적발표(2.02) 8-K는 press release가 Exhibit 99.1에 있어 내용이 더 풍부함
+    exhibit_text = ""
+    if cik_int and accession_clean:
+        idx_url = (
+            f"https://www.sec.gov/Archives/edgar/data/"
+            f"{cik_int}/{accession_clean}/"
+        )
         try:
-            idx_url = (
-                f"https://www.sec.gov/Archives/edgar/data/"
-                f"{cik_int}/{accession_clean}/"
-            )
             idx_resp = requests.get(idx_url, headers=_HEADERS, timeout=10)
             if idx_resp.status_code == 200:
-                # href에서 .htm/.html 파일 목록 추출
-                hrefs = _re.findall(r'href="([^"]+\.htm[l]?)"', idx_resp.text, _re.IGNORECASE)
-                # Exhibit 99 계열 우선
-                exhibit_urls = []
-                other_urls = []
+                hrefs = _re.findall(
+                    r'href="([^"]+\.htm[l]?)"', idx_resp.text, _re.IGNORECASE
+                )
                 for href in hrefs:
                     name = href.lower()
-                    # 상대경로 → 절대경로 올바르게 변환
+                    # Exhibit 99 계열만 탐색 (press release)
+                    if not ("ex99" in name or "ex-99" in name
+                            or "exhibit99" in name or "press" in name):
+                        continue
+                    # 상대경로 → 절대경로 변환
                     if href.startswith("http"):
                         url = href
                     elif href.startswith("/"):
                         url = f"https://www.sec.gov{href}"
                     else:
-                        # 파일명만 있는 경우 — base_url에 붙임
                         url = idx_url + href
-                    if "ex99" in name or "ex-99" in name or "exhibit99" in name or "press" in name:
-                        exhibit_urls.append(url)
-                    elif accession_clean.lower() in name or "8k" in name or "form" in name:
-                        other_urls.append(url)
-                    else:
-                        other_urls.append(url)
-
-                for url in (exhibit_urls + other_urls)[:4]:
-                    try:
-                        doc_resp = requests.get(url, headers=_HEADERS, timeout=12)
-                        if doc_resp.status_code == 200:
-                            text = _clean_html(doc_resp.text)
-                            if len(text) > 300:  # 의미있는 내용 있을 때만
-                                # 본문 시작 지점 찾기
-                                for kw in ["ITEM ", "Item ", "PRESS RELEASE", "PURSUANT TO",
-                                           "WHEREAS", "RESOLVED", "AGREEMENT", "Dear "]:
-                                    idx = text.find(kw)
-                                    if 0 < idx < 5000:
-                                        text = text[idx:]
-                                        break
-                                logger.debug("SEC 문서 읽기 성공: %s (%d자)", url, len(text))
-                                return text[:max_chars]
-                    except Exception:
-                        continue
+                    raw = _fetch_clean(url)
+                    if len(raw) > 300:
+                        exhibit_text = _extract_body(raw)
+                        logger.debug("SEC Exhibit 읽기 성공: %s (%d자)", url, len(exhibit_text))
+                        break
         except Exception as e:
             logger.debug("SEC 인덱스 탐색 실패: %s", e)
 
-    # fallback: 원본 링크 직접 읽기
-    try:
-        resp = requests.get(filing_link, headers=_HEADERS, timeout=15)
-        resp.raise_for_status()
-        text = _clean_html(resp.text)
-        # 본문 시작 지점 찾기
-        for keyword in ["ITEM ", "Item ", "PRESS RELEASE", "PURSUANT TO",
-                        "AGREEMENT", "WHEREAS", "RESOLVED"]:
-            idx = text.find(keyword)
-            if 0 < idx < 5000:
-                text = text[idx:]
-                break
-        return text[:max_chars]
-    except Exception as e:
-        logger.debug("SEC 문서 본문 가져오기 실패 (%s): %s", filing_link, e)
-        return ""
+    # ── 최종 선택: 더 긴(내용이 풍부한) 쪽 반환 ────────────────────────────
+    best = exhibit_text if len(exhibit_text) > len(primary_text) else primary_text
+    if best:
+        return best[:max_chars]
+
+    logger.debug("SEC 문서 본문 가져오기 실패 (%s)", filing_link)
+    return ""
 
 
 def fetch_sec_filings(ticker: str, form_types: List[str]) -> List[Dict[str, Any]]:
