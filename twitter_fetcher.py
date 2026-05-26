@@ -83,7 +83,9 @@ def _check_instance_health(instance: str, timeout: int = 6) -> bool:
         import requests as _req
         url = f"{instance.rstrip('/')}/elonmusk/rss"
         r = _req.get(url, timeout=timeout, headers=_BROWSER_HEADERS)
-        return r.status_code == 200 and "rss" in r.headers.get("content-type", "").lower()
+        # content-type: rss, xml, text/xml, application/rss+xml 모두 허용
+        ct = r.headers.get("content-type", "").lower()
+        return r.status_code == 200 and ("rss" in ct or "xml" in ct)
     except Exception:
         return False
 
@@ -94,7 +96,9 @@ def _check_rsshub_health(instance: str, timeout: int = 6) -> bool:
         import requests as _req
         url = f"{instance.rstrip('/')}/twitter/user/elonmusk"
         r = _req.get(url, timeout=timeout, headers=_BROWSER_HEADERS)
-        return r.status_code == 200
+        # content-type: rss, xml, text/xml, application/rss+xml 모두 허용
+        ct = r.headers.get("content-type", "").lower()
+        return r.status_code == 200 and ("rss" in ct or "xml" in ct)
     except Exception:
         return False
 
