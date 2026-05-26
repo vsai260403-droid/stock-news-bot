@@ -1,12 +1,12 @@
 """
 twitter_fetcher.py - 트위터/X 타임라인 수집
 
-1순위: RSSHub 공개 인스턴스 (Nitter보다 VPS IP 차단률 낙음)
-2순위: Nitter 인스턴스 (fallback)
+1순위: Nitter 인스턴스
+2순위: RSSHub 공개 인스턴스
 
 Twitter API 키 불필요.
-인스턴스 목록 1시간마다 자동 상태 체크 후 살아있는 것만 사용.
 """
+import calendar
 import logging
 import re
 import time
@@ -14,8 +14,6 @@ from typing import Any, Dict, List, Optional
 
 logger = logging.getLogger(__name__)
 
-# ── RSSHub 인스턴스 ────────────────────────────────────────────────
-# RSS URL 패턴: {base}/twitter/user/{username}
 _RSSHUB_INSTANCES: List[str] = [
     "https://rsshub.app",
     "https://rsshub.rssforever.com",
@@ -23,9 +21,6 @@ _RSSHUB_INSTANCES: List[str] = [
     "https://rsshub.privacyredirect.com",
 ]
 
-# ── Nitter 인스턴스 (fallback) ─────────────────────────────────────────
-# RSS URL 패턴: {base}/{username}/rss
-# nitter.net을 맨 앞에 배치 (가장 안정적)
 _NITTER_INSTANCES: List[str] = [
     "https://nitter.net",
     "https://xcancel.com",
@@ -42,24 +37,8 @@ _NITTER_INSTANCES: List[str] = [
     "https://nitter.1d4.us",
 ]
 
-_ALL_NITTER_INSTANCES = _NITTER_INSTANCES  # 하위 호환
+_ALL_NITTER_INSTANCES = _NITTER_INSTANCES
 
-# 브라우저 헤더 (보트 차단 회피)
-_BROWSER_HEADERS = {
-    "User-Agent": (
-        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-        "AppleWebKit/537.36 (KHTML, like Gecko) "
-        "Chrome/124.0.0.0 Safari/537.36"
-    ),
-    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-    "Accept-Language": "en-US,en;q=0.5",
-    "Accept-Encoding": "gzip, deflate",
-    "Connection": "keep-alive",
-}
-
-# (건강 체크 제거됨 — 매번 전체 목록 순서대로 시도)
-
-# 브라우저 헤더 (봇 차단 회피) — 모든 함수에서 사용하므로 여기 정의
 _BROWSER_HEADERS = {
     "User-Agent": (
         "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
@@ -75,7 +54,6 @@ _BROWSER_HEADERS = {
 
 def get_healthy_instances() -> List[str]:
     """사용할 인스턴스 목록을 반환합니다. Nitter 우선, 그 다음 RSSHub."""
-    # 건강 체크 없이 매번 전체 목록 반환 (nitter.net이 맨 앞)
     return list(_NITTER_INSTANCES) + list(_RSSHUB_INSTANCES)
 
 
@@ -85,18 +63,18 @@ KNOWN_ACCOUNTS: Dict[str, List[str]] = {
     "NVDA": ["nvidia", "JensenHuang"],
     "MSFT": ["Microsoft", "satyanadella"],
     "GOOGL": ["Google", "sundarpichai"],
-    "GOOG":  ["Google", "sundarpichai"],
-    "AMZN":  ["Amazon", "JeffBezos"],
-    "META":  ["Meta", "zuck"],
-    "NFLX":  ["netflix"],
-    "AMD":   ["AMD"],
-    "INTC":  ["intel"],
-    "BABA":  ["alibaba"],
-    "TSM":   ["tsmc"],
-    "JPM":   ["jpmorgan"],
-    "BAC":   ["BankofAmerica"],
-    "COIN":  ["coinbase"],
-    "HOOD":  ["RobinhoodApp"],
+    "GOOG": ["Google", "sundarpichai"],
+    "AMZN": ["Amazon", "JeffBezos"],
+    "META": ["Meta", "zuck"],
+    "NFLX": ["netflix"],
+    "AMD": ["AMD"],
+    "INTC": ["intel"],
+    "BABA": ["alibaba"],
+    "TSM": ["tsmc"],
+    "JPM": ["jpmorgan"],
+    "BAC": ["BankofAmerica"],
+    "COIN": ["coinbase"],
+    "HOOD": ["RobinhoodApp"],
 }
 
 
@@ -113,9 +91,40 @@ def _strip_html(text: str) -> str:
     return text
 
 
-def _try_fetch_rss_nitter(
-    instance: str, username: str, timeout: int = 8
-) -> List[Dict[str, Any]]:
+def _is_rsshub_instance(instance: str) -> bool:
+    """인스턴스가 RSSHub인지 URL 패턴으로 판단합니다."""
+    return "rsshub" in instance.lower() or "hub.slarker" in instance.lower()
+
+
+def _parse_feed_entries(feed: Any, username: str) -> List[Dict[str, Any]]:
+    """feedparser 결과를 공통 포맷으로 변환합니다."""
+    result: List[Dict[str, Any]] = []
+    for entry in feed.entries[:10]:
+        raw_id = entry.get("id") or entry.get("link", "")
+        if not raw_id:
+            continue
+
+        published = entry.get("published_parsed")
+        # feedparser의 published_parsed는 UTC struct_time으로 취급해야 합니다.
+        # time.mktime()은 서버 로컬 타임존으로 해석하므로 시간이 밀릴 수 있습니다.
+        ts = int(calendar.timegm(published)) if published else 0
+
+        title = _strip_html(entry.get("title", ""))
+        summary = _strip_html(entry.get("summary", ""))
+        text = summary if summary else title
+        result.append({
+            "id": f"tweet_{username}_{raw_id}",
+            "username": username,
+            "title": title[:300],
+            "text": text[:500],
+            "link": entry.get("link", ""),
+            "publish_time": ts,
+            "source": "Twitter/X",
+        })
+    return result
+
+
+def _try_fetch_rss_nitter(instance: str, username: str, timeout: int = 8) -> List[Dict[str, Any]]:
     """Nitter 인스턴스에서 RSS를 가져옵니다."""
     try:
         import feedparser
@@ -126,7 +135,6 @@ def _try_fetch_rss_nitter(
 
     url = f"{instance.rstrip('/')}/{username}/rss"
     try:
-        # requests로 직접 가져와서 feedparser에 텍스트 전달 (헤더 확실히 적용)
         r = _req.get(url, timeout=timeout, headers=_BROWSER_HEADERS)
         if r.status_code != 200:
             logger.info("Nitter [%s] @%s HTTP %d", instance, username, r.status_code)
@@ -144,19 +152,17 @@ def _try_fetch_rss_nitter(
         return []
 
 
-def _try_fetch_rss_rsshub(
-    instance: str, username: str, timeout: int = 8
-) -> List[Dict[str, Any]]:
+def _try_fetch_rss_rsshub(instance: str, username: str, timeout: int = 8) -> List[Dict[str, Any]]:
     """RSSHub 인스턴스에서 RSS를 가져옵니다."""
     try:
         import feedparser
         import requests as _req
     except ImportError:
+        logger.warning("feedparser 또는 requests 미설치")
         return []
 
     url = f"{instance.rstrip('/')}/twitter/user/{username}"
     try:
-        # requests로 직접 가져와서 feedparser에 텍스트 전달 (헤더 확실히 적용)
         r = _req.get(url, timeout=timeout, headers=_BROWSER_HEADERS)
         if r.status_code != 200:
             logger.info("RSSHub [%s] @%s HTTP %d", instance, username, r.status_code)
@@ -172,7 +178,6 @@ def _try_fetch_rss_rsshub(
     except Exception as e:
         logger.info("RSSHub [%s] @%s 실패: %s", instance, username, e)
         return []
-        return []
 
 
 def _try_fetch_rss(instance: str, username: str, timeout: int = 8) -> List[Dict[str, Any]]:
@@ -180,45 +185,26 @@ def _try_fetch_rss(instance: str, username: str, timeout: int = 8) -> List[Dict[
     return _try_fetch_rss_nitter(instance, username, timeout)
 
 
-def _parse_feed_entries(feed: Any, username: str) -> List[Dict[str, Any]]:
-    """feedparser 결과를 공통 포맷으로 변환합니다."""
-    result: List[Dict[str, Any]] = []
-    for entry in feed.entries[:10]:
-        raw_id = entry.get("id") or entry.get("link", "")
-        if not raw_id:
-            continue
-        published = entry.get("published_parsed")
-        ts = int(time.mktime(published)) if published else 0
-        title = _strip_html(entry.get("title", ""))
-        summary = _strip_html(entry.get("summary", ""))
-        text = summary if summary else title
-        result.append({
-            "id": f"tweet_{username}_{raw_id}",
-            "username": username,
-            "title": title[:300],
-            "text": text[:500],
-            "link": entry.get("link", ""),
-            "publish_time": ts,
-            "source": "Twitter/X",
-        })
-    return result
-
-
 def probe_instance(instance: str, username: str, timeout: int = 8) -> Dict[str, Any]:
     """HTTP 수준에서 인스턴스 상태를 상세 진단합니다 (!twitter-test용)."""
-    import requests as _req
     import feedparser as _fp
+    import requests as _req
 
-    # URL 패턴으로 RSSHub vs Nitter 자동 판단
     is_rsshub = _is_rsshub_instance(instance)
     if is_rsshub:
         url = f"{instance.rstrip('/')}/twitter/user/{username}"
     else:
         url = f"{instance.rstrip('/')}/{username}/rss"
 
-    result: Dict[str, Any] = {"url": url, "type": "RSSHub" if is_rsshub else "Nitter",
-                               "http_status": None, "content_type": None,
-                               "entries": 0, "bozo": None, "error": None}
+    result: Dict[str, Any] = {
+        "url": url,
+        "type": "RSSHub" if is_rsshub else "Nitter",
+        "http_status": None,
+        "content_type": None,
+        "entries": 0,
+        "bozo": None,
+        "error": None,
+    }
     try:
         r = _req.get(url, timeout=timeout, headers=_BROWSER_HEADERS)
         result["http_status"] = r.status_code
@@ -233,23 +219,14 @@ def probe_instance(instance: str, username: str, timeout: int = 8) -> Dict[str, 
     return result
 
 
-def _is_rsshub_instance(instance: str) -> bool:
-    """인스턴스가 RSSHub인지 URL 패턴으로 판단합니다."""
-    return "rsshub" in instance.lower() or "hub.slarker" in instance.lower()
-
-
 def fetch_twitter_timeline(
     username: str,
     nitter_instances: Optional[List[str]] = None,
 ) -> List[Dict[str, Any]]:
-    """
-    RSSHub → Nitter 순으로 시도하여 트위터 타임라인을 가져옵니다.
-    모든 인스턴스 실패 시 빈 리스트를 반환합니다.
-    """
+    """RSSHub → Nitter 순으로 시도하여 트위터 타임라인을 가져옵니다."""
     instances = nitter_instances or get_healthy_instances()
 
     for instance in instances:
-        # URL 패턴으로 RSSHub vs Nitter 판단 (리스트 비교 대신)
         if _is_rsshub_instance(instance):
             result = _try_fetch_rss_rsshub(instance, username)
         else:
@@ -264,10 +241,7 @@ def fetch_twitter_timeline(
 
 
 def fetch_all_tweets(ticker: str, config: dict) -> List[Dict[str, Any]]:
-    """
-    config에 설정된 트위터 계정들에서 해당 티커의 트윗을 모두 가져옵니다.
-    monitor_twitter: false 이면 즉시 빈 리스트 반환.
-    """
+    """config에 설정된 트위터 계정들에서 해당 티커의 트윗을 모두 가져옵니다."""
     if not config.get("monitor_twitter", False):
         return []
 
@@ -276,25 +250,24 @@ def fetch_all_tweets(ticker: str, config: dict) -> List[Dict[str, Any]]:
     if not usernames:
         return []
 
-    # config의 nitter_instances 무시, 항상 최신 목록 사용
     result: List[Dict[str, Any]] = []
-
     for username in usernames:
-        tweets = fetch_twitter_timeline(username)  # get_healthy_instances() 사용
+        tweets = fetch_twitter_timeline(username)
         for tweet in tweets:
             tweet["ticker"] = ticker.upper()
         result.extend(tweets)
         if len(usernames) > 1:
-            time.sleep(0.5)  # 인스턴스 부하 분산
+            time.sleep(0.5)
 
-    # 시간 필터: tweet_max_age_hours 이상 지난 트윗 제외 (기본 24시간)
-    max_age_hours = config.get("tweet_max_age_hours", 24)
+    # 시간 필터: 최근 트윗만 알림 대상으로 유지합니다.
+    # 기본값을 6시간으로 줄여서 전날 트윗이 새 알림처럼 오는 상황을 줄입니다.
+    max_age_hours = config.get("tweet_max_age_hours", 6)
     if max_age_hours > 0:
         cutoff_ts = int(time.time()) - (max_age_hours * 3600)
         before = len(result)
         result = [t for t in result if t.get("publish_time", 0) >= cutoff_ts]
         skipped = before - len(result)
         if skipped > 0:
-            logger.debug("[%s] 트윗 시간 필터: %d건 제외 (%d시간 이상 경과)", ticker, skipped, max_age_hours)
+            logger.info("[%s] 트윗 시간 필터: %d건 제외 (%d시간 이상 경과)", ticker, skipped, max_age_hours)
 
     return result
