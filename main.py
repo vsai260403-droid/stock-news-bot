@@ -330,10 +330,13 @@ def check_tweets(config: dict, seen: Set[str], initial: bool = False) -> int:
             tweets = fetch_twitter_timeline(username)  # nitter_instances=None → get_healthy_instances() 사용
             for tweet in tweets:
                 if cutoff_ts and tweet.get("publish_time", 0) < cutoff_ts:
+                    logger.info("[GLOBAL] @%s 트윗 시간 초과 skip (publish_time=%s, cutoff=%s)",
+                                username, tweet.get("publish_time"), cutoff_ts)
                     continue
                 tweet["ticker"] = ""  # 티커 없음
                 item_id = tweet["id"]
                 if not item_id or item_id in seen:
+                    logger.info("[GLOBAL] @%s 이미 seen skip (id=%s)", username, item_id)
                     continue
                 seen.add(item_id)
                 if not initial:
@@ -345,6 +348,8 @@ def check_tweets(config: dict, seen: Set[str], initial: bool = False) -> int:
                             tweet["title"][:60],
                         )
                         time.sleep(0.5)
+                else:
+                    logger.info("[GLOBAL] @%s 초기 로드 skip (initial=True, id=%s)", username, item_id)
 
     return count
 
