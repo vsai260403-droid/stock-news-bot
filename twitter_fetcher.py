@@ -276,13 +276,11 @@ def fetch_all_tweets(ticker: str, config: dict) -> List[Dict[str, Any]]:
     if not usernames:
         return []
 
-    nitter_instances: List[str] = config.get(
-        "nitter_instances"
-    ) or get_healthy_instances()
+    # config의 nitter_instances 무시, 항상 최신 목록 사용
     result: List[Dict[str, Any]] = []
 
     for username in usernames:
-        tweets = fetch_twitter_timeline(username, nitter_instances)
+        tweets = fetch_twitter_timeline(username)  # get_healthy_instances() 사용
         for tweet in tweets:
             tweet["ticker"] = ticker.upper()
         result.extend(tweets)

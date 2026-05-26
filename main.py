@@ -323,11 +323,11 @@ def check_tweets(config: dict, seen: Set[str], initial: bool = False) -> int:
     global_accounts: list = config.get("twitter_accounts", {}).get("_GLOBAL_", [])
     if global_accounts:
         from twitter_fetcher import fetch_twitter_timeline
-        nitter_instances = config.get("nitter_instances", None)
+        # config의 nitter_instances 무시, twitter_fetcher.py의 최신 목록 사용
         max_age_hours = config.get("tweet_max_age_hours", 24)
         cutoff_ts = int(time.time()) - (max_age_hours * 3600) if max_age_hours > 0 else 0
         for username in global_accounts:
-            tweets = fetch_twitter_timeline(username, nitter_instances)
+            tweets = fetch_twitter_timeline(username)  # nitter_instances=None → get_healthy_instances() 사용
             for tweet in tweets:
                 if cutoff_ts and tweet.get("publish_time", 0) < cutoff_ts:
                     continue
