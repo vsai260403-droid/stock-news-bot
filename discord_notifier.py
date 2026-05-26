@@ -4,11 +4,15 @@ discord_notifier.py - Discord 웹훅으로 알람 전송
 import logging
 import time
 from datetime import datetime, timezone
+from zoneinfo import ZoneInfo
 from typing import Any, Dict, Optional
 
 import requests
 
 logger = logging.getLogger(__name__)
+
+# 표시용 시간대: 한국 시간으로 고정
+_KST = ZoneInfo("Asia/Seoul")
 
 # Embed 색상 (10진수 RGB)
 _COLOR_NEWS = 3447003      # 파랑
@@ -25,15 +29,17 @@ _SEC_COLORS: Dict[str, int] = {
 
 
 def _fmt_local(unix_ts: int) -> str:
+    """본문/필드에 표시할 시간을 KST로 고정합니다."""
     if not unix_ts:
         return "N/A"
     try:
-        return datetime.fromtimestamp(unix_ts).strftime("%Y-%m-%d %H:%M:%S")
+        return datetime.fromtimestamp(unix_ts, tz=_KST).strftime("%Y-%m-%d %H:%M:%S KST")
     except Exception:
         return "N/A"
 
 
 def _fmt_iso_utc(unix_ts: int) -> str:
+    """Discord embed timestamp용 ISO UTC 문자열."""
     try:
         return datetime.fromtimestamp(unix_ts, tz=timezone.utc).isoformat()
     except Exception:
@@ -45,7 +51,6 @@ def _post(webhook_url: str, payload: Dict) -> bool:
     try:
         resp = requests.post(webhook_url, json=payload, timeout=10)
 
-        # Rate limit 처리
         if resp.status_code == 429:
             retry_after = resp.json().get("retry_after", 1.0)
             logger.warning("Discord Rate Limit — %.1f초 후 재시도", retry_after)
@@ -69,7 +74,6 @@ def send_news_alert(webhook_url: str, item: Dict[str, Any]) -> bool:
     publish_time = item.get("publish_time", 0)
     ai_summary: Optional[str] = item.get("ai_summary") or None
 
-    # description: AI 요약이 있으면 표시, 없으면 기본 정보만
     if ai_summary:
         description = (
             f"🤖 **AI 요약 (한국어)**\n{ai_summary}\n\n"
@@ -119,10 +123,8 @@ def send_tweet_alert(webhook_url: str, item: Dict[str, Any]) -> bool:
     publish_time = item.get("publish_time", 0)
     ai_summary: Optional[str] = item.get("ai_summary") or None
 
-    # summary가 title과 같으면 중복 방지
     tweet_body = text if (text and text != title) else title
 
-    # AI 요약이 있으면 앞에 표시, 없으면 트윗 원문
     if ai_summary:
         description = f"🤖 **AI 요약 (한국어)**\n{ai_summary}\n\n**원문:** {tweet_body}"
     else:
@@ -130,7 +132,7 @@ def send_tweet_alert(webhook_url: str, item: Dict[str, Any]) -> bool:
 
     embed: Dict[str, Any] = {
         "title": f"🐦  [{ticker}]  @{username}" if ticker else f"🐦  @{username}",
-        "color": 1942002,  # 트위터 파랑
+        "color": 1942002,
         "description": description[:1000] if description else "(내용 없음)",
         "fields": [
             {
@@ -222,7 +224,6 @@ _DOWN_COMMENTS: Dict[int, list] = {
 def _pick_comment(is_up: bool, level: int) -> str:
     import random
     bank = _UP_COMMENTS if is_up else _DOWN_COMMENTS
-    # 레벨 4 이상은 최고 단계 사용
     tier = min(level, 4)
     tier = max(tier, 1)
     return random.choice(bank[tier])
@@ -237,15 +238,14 @@ def send_price_alert(webhook_url: str, item: Dict[str, Any]) -> bool:
     change = item.get("change", 0.0)
     change_pct = item.get("change_pct", 0.0)
     currency = item.get("currency", "USD")
-    target_pct = item.get("target_pct")  # 돌파한 레벨 (None이면 단순 조회)
+    target_pct = item.get("target_pct")
     threshold = item.get("threshold")
 
     is_up = change >= 0
     arrow = "📈" if is_up else "📉"
     sign = "+" if is_up else ""
-    color = 5763719 if is_up else 15158332  # 초록 : 빨강
+    color = 5763719 if is_up else 15158332
 
-    # 레벨 계산 (threshold 기반)
     alert_level = 1
     if target_pct is not None and threshold and threshold > 0:
         alert_level = max(1, int(abs(target_pct) / threshold))
