@@ -117,14 +117,21 @@ def send_tweet_alert(webhook_url: str, item: Dict[str, Any]) -> bool:
     text = item.get("text", "")[:500]
     link: Optional[str] = item.get("link") or None
     publish_time = item.get("publish_time", 0)
+    ai_summary: Optional[str] = item.get("ai_summary") or None
 
     # summary가 title과 같으면 중복 방지
-    description = text if (text and text != title) else title
+    tweet_body = text if (text and text != title) else title
+
+    # AI 요약이 있으면 앞에 표시, 없으면 트윗 원문
+    if ai_summary:
+        description = f"🤖 **AI 요약 (한국어)**\n{ai_summary}\n\n**원문:** {tweet_body}"
+    else:
+        description = tweet_body
 
     embed: Dict[str, Any] = {
-        "title": f"🐦  [{ticker}]  @{username}",
+        "title": f"🐦  [{ticker}]  @{username}" if ticker else f"🐦  @{username}",
         "color": 1942002,  # 트위터 파랑
-        "description": description[:500] if description else "(내용 없음)",
+        "description": description[:1000] if description else "(내용 없음)",
         "fields": [
             {
                 "name": "게시 시간",
@@ -137,7 +144,7 @@ def send_tweet_alert(webhook_url: str, item: Dict[str, Any]) -> bool:
                 "inline": True,
             },
         ],
-        "footer": {"text": f"Twitter/X Alert  •  {ticker}"},
+        "footer": {"text": f"Twitter/X Alert  •  {ticker}" if ticker else "Twitter/X Alert"},
         "timestamp": _fmt_iso_utc(publish_time),
     }
     if link:

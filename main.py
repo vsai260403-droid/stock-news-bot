@@ -296,6 +296,7 @@ def check_tweets(config: dict, seen: Set[str], initial: bool = False) -> int:
     """등록된 트위터 계정에서 새 트윗을 확인하고 Discord로 전송합니다."""
     webhook_url = config["discord_webhook_url"]
     twitter_on = config.get("monitor_twitter", False)
+    gemini_api_key = config.get("gemini_api_key", "").strip()
     count = 0
 
     # 티커 연동 계정 (트위터 알람 ON일 때만)
@@ -310,6 +311,12 @@ def check_tweets(config: dict, seen: Set[str], initial: bool = False) -> int:
                     continue
                 seen.add(item_id)
                 if not initial:
+                    if gemini_api_key and not item.get("ai_summary"):
+                        item["ai_summary"] = ai_summarize_news(
+                            item.get("text") or item.get("title", ""),
+                            f"@{item.get('username', '')}",
+                            gemini_api_key,
+                        )
                     if send_tweet_alert(webhook_url, item):
                         count += 1
                         logger.info(
@@ -343,6 +350,12 @@ def check_tweets(config: dict, seen: Set[str], initial: bool = False) -> int:
                     continue
                 seen.add(item_id)
                 if not initial:
+                    if gemini_api_key and not tweet.get("ai_summary"):
+                        tweet["ai_summary"] = ai_summarize_news(
+                            tweet.get("text") or tweet.get("title", ""),
+                            f"@{username}",
+                            gemini_api_key,
+                        )
                     if send_tweet_alert(webhook_url, tweet):
                         count += 1
                         logger.info(
