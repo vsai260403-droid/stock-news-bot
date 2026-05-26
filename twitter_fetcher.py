@@ -265,8 +265,8 @@ def probe_instance(instance: str, username: str, timeout: int = 8) -> Dict[str, 
     import requests as _req
     import feedparser as _fp
 
-    # RSSHub vs Nitter URL 패턴 자동 판단
-    is_rsshub = instance in _RSSHUB_INSTANCES
+    # RSSHub vs Nitter URL 패턴 자동 판단 (URL에 rsshub 포함 여부로 판단)
+    is_rsshub = "rsshub" in instance.lower() or "hub.slarker" in instance.lower()
     if is_rsshub:
         url = f"{instance.rstrip('/')}/twitter/user/{username}"
     else:
