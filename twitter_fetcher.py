@@ -206,6 +206,8 @@ def probe_instance(instance: str, username: str, timeout: int = 8) -> Dict[str, 
         result["error"] = str(e)[:80]
     return result
 
+
+def fetch_twitter_timeline(
     username: str,
     nitter_instances: Optional[List[str]] = None,
 ) -> List[Dict[str, Any]]:
