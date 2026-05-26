@@ -402,36 +402,45 @@ def _make_bot(prefix: str):
             await ctx.send("사용법: `!twitter-test @elonmusk`")
             return
         username = username.lstrip("@").strip()
-        await ctx.send(f"🔍 **@{username}** Nitter 수집 테스트 중...")
+        await ctx.send(f"🔍 **@{username}** Nitter 진단 중 (전체 인스턴스)...")
 
-        from twitter_fetcher import _ALL_NITTER_INSTANCES, _try_fetch_rss, get_healthy_instances
+        from twitter_fetcher import _ALL_NITTER_INSTANCES, probe_instance
         import asyncio
 
         cfg = _load_config()
-        # config에 직접 지정된 경우 그것 사용, 없으면 자동 체크 목록
-        custom = cfg.get("nitter_instances")
-        instances = custom or _ALL_NITTER_INSTANCES
+        instances = cfg.get("nitter_instances") or _ALL_NITTER_INSTANCES
+
+        loop = asyncio.get_event_loop()
         lines = []
-        found = 0
+        success_count = 0
 
         for inst in instances:
-            result = await asyncio.get_event_loop().run_in_executor(
-                None, _try_fetch_rss, inst, username
-            )
-            if result:
-                latest = result[0].get("title", "")[:60]
-                lines.append(f"✅ `{inst}`  →  {len(result)}개  (최신: {latest}...)")
-                found += len(result)
-                break
+            info = await loop.run_in_executor(None, probe_instance, inst, username)
+            if info.get("error"):
+                lines.append(f"❌ `{inst}`  →  연결오류: {info['error']}")
+            elif info["http_status"] != 200:
+                lines.append(f"❌ `{inst}`  →  HTTP {info['http_status']}  ({info['content_type']})")
+            elif info["entries"] == 0:
+                bozo = " (파싱오류)" if info["bozo"] else " (엔트리 없음)"
+                lines.append(f"⚠️ `{inst}`  →  HTTP 200 but 트윗 0개{bozo}")
             else:
-                lines.append(f"❌ `{inst}`  →  실패")
+                lines.append(f"✅ `{inst}`  →  HTTP 200  트윗 {info['entries']}개")
+                success_count += 1
 
-        if found:
-            lines.append(f"\n총 {found}개 트윗 수집 성공")
+        lines.append("")
+        if success_count:
+            lines.append(f"✅ 사용 가능 인스턴스 {success_count}개")
         else:
-            lines.append(f"\n⚠️ 모든 Nitter 인스턴스에서 **@{username}** 수집 실패\n"
-                         "Nitter 인스턴스가 모두 다운됐거나 계정명이 잘못됐을 수 있습니다.")
-        await ctx.send("\n".join(lines))
+            lines.append("⚠️ 사용 가능한 Nitter 인스턴스 없음\n"
+                         "• 계정명 오타 여부 확인\n"
+                         "• 비공개 계정이면 RSS 불가\n"
+                         "• https://status.d420.de/ 에서 인스턴스 상태 확인")
+
+        # Discord 2000자 제한 대응
+        msg = "\n".join(lines)
+        if len(msg) > 1900:
+            msg = msg[:1900] + "\n...(생략)"
+        await ctx.send(msg)
 
     # ── !twitter-follows (전용 계정 목록 조회) ────────────────────────────────
     @bot.command(name="twitter-follows")

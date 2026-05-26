@@ -180,11 +180,32 @@ def _try_fetch_rss(
         return result
 
     except Exception as e:
-        logger.debug("Nitter [%s] @%s 실패: %s", instance, username, e)
+        logger.info("Nitter [%s] @%s 실패: %s", instance, username, e)
         return []
 
 
-def fetch_twitter_timeline(
+def probe_instance(instance: str, username: str, timeout: int = 8) -> Dict[str, Any]:
+    """HTTP 수준에서 인스턴스 상태를 상세 진단합니다 (!twitter-test용)."""
+    import requests as _req
+    import feedparser as _fp
+
+    url = f"{instance.rstrip('/')}/{username}/rss"
+    result: Dict[str, Any] = {"url": url, "http_status": None, "content_type": None,
+                               "entries": 0, "bozo": None, "error": None}
+    try:
+        r = _req.get(url, timeout=timeout,
+                     headers={"User-Agent": "Mozilla/5.0 (compatible; StockAlarmBot/1.0)"})
+        result["http_status"] = r.status_code
+        result["content_type"] = r.headers.get("content-type", "")[:60]
+        if r.status_code != 200:
+            return result
+        feed = _fp.parse(r.text)
+        result["bozo"] = feed.bozo
+        result["entries"] = len(feed.entries)
+    except Exception as e:
+        result["error"] = str(e)[:80]
+    return result
+
     username: str,
     nitter_instances: Optional[List[str]] = None,
 ) -> List[Dict[str, Any]]:
