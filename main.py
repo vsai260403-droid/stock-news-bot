@@ -46,12 +46,31 @@ SEEN_SEC_FILE = "seen_sec.json"
 SEEN_SEC_TICKERS_FILE = "seen_sec_tickers.json"  # 초기화된 SEC 티커 추적
 SEEN_TWEETS_FILE = "seen_tweets.json"
 SEEN_PRICE_LEVELS_FILE = "seen_price_levels.json"
+DEFAULT_GEMINI_MODEL = "gemini-3.1-flash-lite"
 
 
 # ─── 유틸 함수 ────────────────────────────────────────────────────────────────
 def load_config() -> dict:
     with open(CONFIG_FILE, "r", encoding="utf-8") as f:
         return json.load(f)
+
+
+def _gemini_summary_model(config: dict) -> str:
+    """뉴스/SEC/트윗 요약에 사용할 Gemini 모델을 config에서 읽습니다."""
+    return (
+        str(config.get("gemini_summary_model", "") or "").strip()
+        or str(config.get("gemini_model", "") or "").strip()
+        or DEFAULT_GEMINI_MODEL
+    )
+
+
+def _gemini_relevance_model(config: dict) -> str:
+    """뉴스 관련성 필터에 사용할 Gemini 모델을 config에서 읽습니다."""
+    return (
+        str(config.get("gemini_relevance_model", "") or "").strip()
+        or str(config.get("gemini_model", "") or "").strip()
+        or DEFAULT_GEMINI_MODEL
+    )
 
 
 def load_seen(filepath: str) -> Set[str]:
@@ -130,12 +149,7 @@ def _title_hash(title: str) -> str:
 
 
 def _price_session_id(info: dict) -> str:
-    """PRE/REGULAR/POST가 공유하는 거래 세션 ID를 반환합니다.
-
-    마지막 1분봉 timestamp를 쓰면 매 체크마다 값이 바뀌어서 같은 5% 알림이 반복될 수 있습니다.
-    price_fetcher가 trading_session_id를 제공하면 그 값을 우선 사용하고,
-    없으면 뉴욕 날짜 기준으로 하루 하나의 세션 ID를 만듭니다.
-    """
+    """PRE/REGULAR/POST가 공유하는 거래 세션 ID를 반환합니다."""
     session_id = info.get("trading_session_id")
     if session_id:
         return str(session_id)
@@ -170,20 +184,13 @@ _trading_session: Dict[str, str] = {}
 
 
 def check_prices(config: dict) -> int:
-    """등록 티커의 주가를 조회하고, 임계값 배수마다 새 레벨에서 Discord 알람을 보냅니다.
-
-    threshold=5% 이면 5%/10%/15%... 돌파 시마다 알람.
-    PRE/REGULAR/POST는 하나의 거래 세션 기록을 공유합니다.
-    CLOSED/UNKNOWN 등 장 외 상태는 체크 스킵합니다.
-    알림 레벨은 seen_price_levels.json에 저장되어 재시작 후에도 중복 발송을 막습니다.
-    """
+    """등록 티커의 주가를 조회하고, 임계값 배수마다 새 레벨에서 Discord 알람을 보냅니다."""
     global _price_levels
 
     if not config.get("monitor_price", True):
         logger.info("주가 변동 알람 비활성화 상태 — 체크 생략")
         return 0
 
-    # 다른 프로세스/수동 테스트가 파일을 갱신했을 가능성까지 반영합니다.
     disk_levels = load_price_levels()
     if disk_levels:
         _price_levels.update(disk_levels)
@@ -270,6 +277,7 @@ def check_news(config: dict, seen: Set[str], initial: bool = False) -> int:
     webhook_url = config["discord_webhook_url"]
     tickers = config.get("tickers", [])
     gemini_api_key = config.get("gemini_api_key", "").strip()
+    gemini_model = _gemini_summary_model(config)
     count = 0
 
     for ticker in tickers:
@@ -278,11 +286,13 @@ def check_news(config: dict, seen: Set[str], initial: bool = False) -> int:
             item_id = item["id"]
             title_hash = _title_hash(item.get("title", ""))
             if not item_id:
+                logger.info("[%s] 뉴스 제외: item_id 없음 — %s", ticker, item.get("title", "")[:120])
                 continue
             already_seen = item_id in seen or title_hash in seen
             seen.add(item_id)
             seen.add(title_hash)
             if already_seen:
+                logger.info("[%s] 뉴스 제외: 이미 seen — %s", ticker, item.get("title", "")[:120])
                 continue
             if not initial:
                 if gemini_api_key:
@@ -290,11 +300,14 @@ def check_news(config: dict, seen: Set[str], initial: bool = False) -> int:
                         item.get("title", ""),
                         item.get("publisher", ""),
                         gemini_api_key,
+                        gemini_model,
                     )
                 if send_news_alert(webhook_url, item):
                     count += 1
                     logger.info("[%s] 뉴스 알람 전송: %s", ticker, item["title"][:60])
                     time.sleep(0.5)
+                else:
+                    logger.warning("[%s] 뉴스 Discord 전송 실패: %s", ticker, item.get("title", "")[:120])
 
     return count
 
@@ -309,6 +322,7 @@ def check_sec(config: dict, seen: Set[str], initial: bool = False) -> int:
     form_types = config.get("sec_form_types", ["8-K"])
     max_age_days = config.get("sec_max_age_days", 30)
     gemini_api_key = config.get("gemini_api_key", "").strip()
+    gemini_model = _gemini_summary_model(config)
     count = 0
 
     for ticker in tickers:
@@ -317,30 +331,33 @@ def check_sec(config: dict, seen: Set[str], initial: bool = False) -> int:
         for item in items:
             item_id = item["id"]
             if not item_id or item_id in seen:
+                logger.info("[%s] SEC 제외: item_id 없음 또는 이미 seen — %s", ticker, item.get("title", item_id))
                 continue
             seen.add(item_id)
             if not initial:
                 if gemini_api_key:
-                    desc = item.get('description') or item.get('form_type', '')
+                    desc = item.get("description") or item.get("form_type", "")
                     body = fetch_filing_text(
                         item.get("link", ""),
                         cik_int=item.get("_cik_int", 0),
                         accession_clean=item.get("_accession_clean", ""),
                     )
                     if body:
-                        summary_input = (
-                            f"[{ticker}] SEC {item.get('form_type','')} 공시 ({desc})\n\n"
-                            f"{body}"
-                        )
+                        summary_input = f"[{ticker}] SEC {item.get('form_type','')} 공시 ({desc})\n\n{body}"
                     else:
                         summary_input = f"[{ticker}] SEC {item.get('form_type','')} 공시 — {desc}"
                     item["ai_summary"] = ai_summarize_news(
-                        summary_input, "SEC EDGAR", gemini_api_key
+                        summary_input,
+                        "SEC EDGAR",
+                        gemini_api_key,
+                        gemini_model,
                     )
                 if send_sec_alert(webhook_url, item):
                     count += 1
                     logger.info("[%s] SEC 공시 알람 전송: %s", ticker, item["form_type"])
                     time.sleep(0.5)
+                else:
+                    logger.warning("[%s] SEC Discord 전송 실패: %s", ticker, item.get("id"))
 
     return count
 
@@ -350,6 +367,7 @@ def check_tweets(config: dict, seen: Set[str], initial: bool = False) -> int:
     webhook_url = config["discord_webhook_url"]
     twitter_on = config.get("monitor_twitter", False)
     gemini_api_key = config.get("gemini_api_key", "").strip()
+    gemini_model = _gemini_summary_model(config)
     count = 0
 
     if twitter_on:
@@ -368,16 +386,14 @@ def check_tweets(config: dict, seen: Set[str], initial: bool = False) -> int:
                             item.get("text") or item.get("title", ""),
                             f"@{item.get('username', '')}",
                             gemini_api_key,
+                            gemini_model,
                         )
                     if send_tweet_alert(webhook_url, item):
                         count += 1
-                        logger.info(
-                            "[%s] 트윗 알람 전송: @%s — %s",
-                            ticker,
-                            item["username"],
-                            item["title"][:60],
-                        )
+                        logger.info("[%s] 트윗 알람 전송: @%s — %s", ticker, item["username"], item["title"][:60])
                         time.sleep(0.5)
+                    else:
+                        logger.warning("[%s] 트윗 Discord 전송 실패: @%s — %s", ticker, item.get("username"), item.get("title", "")[:120])
                 else:
                     logger.info("[%s] @%s 초기 로드 skip (initial=True, id=%s)", ticker, item.get("username"), item_id)
 
@@ -390,8 +406,7 @@ def check_tweets(config: dict, seen: Set[str], initial: bool = False) -> int:
             tweets = fetch_twitter_timeline(username)
             for tweet in tweets:
                 if cutoff_ts and tweet.get("publish_time", 0) < cutoff_ts:
-                    logger.info("[GLOBAL] @%s 트윗 시간 초과 skip (publish_time=%s, cutoff=%s)",
-                                username, tweet.get("publish_time"), cutoff_ts)
+                    logger.info("[GLOBAL] @%s 트윗 시간 초과 skip (publish_time=%s, cutoff=%s)", username, tweet.get("publish_time"), cutoff_ts)
                     continue
                 tweet["ticker"] = ""
                 item_id = tweet["id"]
@@ -405,15 +420,14 @@ def check_tweets(config: dict, seen: Set[str], initial: bool = False) -> int:
                             tweet.get("text") or tweet.get("title", ""),
                             f"@{username}",
                             gemini_api_key,
+                            gemini_model,
                         )
                     if send_tweet_alert(webhook_url, tweet):
                         count += 1
-                        logger.info(
-                            "[GLOBAL] 트윗 알람 전송: @%s — %s",
-                            username,
-                            tweet["title"][:60],
-                        )
+                        logger.info("[GLOBAL] 트윗 알람 전송: @%s — %s", username, tweet["title"][:60])
                         time.sleep(0.5)
+                    else:
+                        logger.warning("[GLOBAL] 트윗 Discord 전송 실패: @%s — %s", username, tweet.get("title", "")[:120])
                 else:
                     logger.info("[GLOBAL] @%s 초기 로드 skip (initial=True, id=%s)", username, item_id)
 
@@ -446,13 +460,11 @@ def main() -> None:
     logger.info("주식 뉴스 Discord 알람 시스템 시작")
     logger.info("모니터링 티커: %s", ", ".join(config["tickers"]))
     logger.info("뉴스 소스: %s", ", ".join(config.get("news_sources", ["yahoo", "google_rss"])))
+    logger.info("Gemini 요약 모델: %s", _gemini_summary_model(config))
+    logger.info("Gemini 관련성 모델: %s", _gemini_relevance_model(config))
     logger.info("뉴스 체크 주기: %d초", news_interval)
     if monitor_sec:
-        logger.info(
-            "SEC 공시 체크 주기: %d초  (양식: %s)",
-            sec_interval,
-            ", ".join(config.get("sec_form_types", ["8-K"])),
-        )
+        logger.info("SEC 공시 체크 주기: %d초  (양식: %s)", sec_interval, ", ".join(config.get("sec_form_types", ["8-K"])))
     if monitor_twitter:
         twitter_accounts = config.get("twitter_accounts", {})
         account_summary = ", ".join(
@@ -469,10 +481,7 @@ def main() -> None:
     else:
         global_accs = config.get("twitter_accounts", {}).get("_GLOBAL_", [])
         if global_accs:
-            logger.info(
-                "트위터 모니터링: OFF  (전용 팔로우: %s)",
-                ", ".join("@" + u for u in global_accs),
-            )
+            logger.info("트위터 모니터링: OFF  (전용 팔로우: %s)", ", ".join("@" + u for u in global_accs))
     threshold = config.get("price_alert_threshold_pct", 5.0)
     logger.info("주가 변동 알람: %.1f%% 이상 시 알람  (체크 주기: %d초)", threshold, price_interval)
     logger.info("=" * 60)
@@ -507,10 +516,7 @@ def main() -> None:
         current_tickers = {t.upper() for t in cfg.get("tickers", [])}
         new_tickers = current_tickers - seen_sec_tickers
         if new_tickers:
-            logger.info(
-                "새 티커 감지 — SEC 초기 로드 중 (알람 없음): %s",
-                ", ".join(sorted(new_tickers)),
-            )
+            logger.info("새 티커 감지 — SEC 초기 로드 중 (알람 없음): %s", ", ".join(sorted(new_tickers)))
             temp_cfg = dict(cfg)
             temp_cfg["tickers"] = list(new_tickers)
             check_sec(temp_cfg, seen_sec, initial=True)
