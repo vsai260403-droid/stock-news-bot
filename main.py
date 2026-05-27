@@ -45,6 +45,7 @@ SEEN_NEWS_FILE = "seen_news.json"
 SEEN_SEC_FILE = "seen_sec.json"
 SEEN_SEC_TICKERS_FILE = "seen_sec_tickers.json"  # 초기화된 SEC 티커 추적
 SEEN_TWEETS_FILE = "seen_tweets.json"
+SEEN_PRICE_LEVELS_FILE = "seen_price_levels.json"
 
 
 # ─── 유틸 함수 ────────────────────────────────────────────────────────────────
@@ -86,6 +87,40 @@ def save_seen(filepath: str, seen: Set[str]) -> None:
             result[item_id] = ts
     with open(filepath, "w", encoding="utf-8") as f:
         json.dump(result, f, indent=2)
+
+
+def load_price_levels() -> Dict[str, int]:
+    """주가 알림 레벨 기록을 파일에서 로드합니다.
+
+    예: {"ATOM_20260527_up": 4} 는 해당 거래 세션에서 +20%까지 알림 완료를 뜻합니다.
+    봇을 재시작해도 같은 레벨 알림이 다시 오지 않도록 파일에 저장합니다.
+    """
+    if not os.path.exists(SEEN_PRICE_LEVELS_FILE):
+        return {}
+    try:
+        with open(SEEN_PRICE_LEVELS_FILE, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        if not isinstance(data, dict):
+            return {}
+        result: Dict[str, int] = {}
+        for key, value in data.items():
+            try:
+                result[str(key)] = int(value)
+            except (TypeError, ValueError):
+                continue
+        return result
+    except Exception as e:
+        logger.warning("주가 알림 기록 로드 실패: %s", e)
+        return {}
+
+
+def save_price_levels(levels: Dict[str, int]) -> None:
+    """주가 알림 레벨 기록을 파일에 저장합니다."""
+    try:
+        with open(SEEN_PRICE_LEVELS_FILE, "w", encoding="utf-8") as f:
+            json.dump(levels, f, indent=2, ensure_ascii=False)
+    except Exception as e:
+        logger.warning("주가 알림 기록 저장 실패: %s", e)
 
 
 def _title_hash(title: str) -> str:
@@ -130,7 +165,7 @@ def _validate_config(config: dict) -> bool:
 
 # ─── 주가 변동 체크 ───────────────────────────────────────────────────────────
 # "TICKER_{session_id}_up" 또는 "_down" 키 → 해당 거래 세션에서 트리거된 최대 레벨
-_price_levels: Dict[str, int] = {}
+_price_levels: Dict[str, int] = load_price_levels()
 _trading_session: Dict[str, str] = {}
 
 
@@ -140,16 +175,25 @@ def check_prices(config: dict) -> int:
     threshold=5% 이면 5%/10%/15%... 돌파 시마다 알람.
     PRE/REGULAR/POST는 하나의 거래 세션 기록을 공유합니다.
     CLOSED/UNKNOWN 등 장 외 상태는 체크 스킵합니다.
+    알림 레벨은 seen_price_levels.json에 저장되어 재시작 후에도 중복 발송을 막습니다.
     """
+    global _price_levels
+
     if not config.get("monitor_price", True):
         logger.info("주가 변동 알람 비활성화 상태 — 체크 생략")
         return 0
+
+    # 다른 프로세스/수동 테스트가 파일을 갱신했을 가능성까지 반영합니다.
+    disk_levels = load_price_levels()
+    if disk_levels:
+        _price_levels.update(disk_levels)
 
     webhook_url = config["discord_webhook_url"]
     tickers = config.get("tickers", [])
     threshold = float(config.get("price_alert_threshold_pct", 5.0) or 5.0)
     count = 0
     checked = 0
+    levels_changed = False
 
     for ticker in tickers:
         info = fetch_price(ticker)
@@ -187,8 +231,8 @@ def check_prices(config: dict) -> int:
 
         if current_level <= max_alerted:
             logger.info(
-                "[%s] 주가 체크: %.2f%% 레벨%d, 이미 레벨%d까지 알림 완료 (market=%s)",
-                ticker, change_pct, current_level, max_alerted, market_state,
+                "[%s] 주가 체크: %.2f%% 레벨%d, 이미 레벨%d까지 알림 완료 (market=%s, session=%s)",
+                ticker, change_pct, current_level, max_alerted, market_state, session_id,
             )
             continue
 
@@ -200,6 +244,8 @@ def check_prices(config: dict) -> int:
             alert_info["threshold"] = threshold
             if send_price_alert(webhook_url, alert_info):
                 _price_levels[level_key] = lvl
+                levels_changed = True
+                save_price_levels(_price_levels)
                 count += 1
                 logger.info(
                     "[%s] 주가 레벨%d 알람 전송: %.2f%% 돌파 (현재 %.2f%%, 가격 %.2f, market=%s, session=%s)",
@@ -208,7 +254,12 @@ def check_prices(config: dict) -> int:
                 time.sleep(0.5)
             else:
                 logger.warning("[%s] 주가 레벨%d Discord 전송 실패", ticker, lvl)
-        _price_levels[level_key] = current_level
+        if _price_levels.get(level_key, 0) < current_level:
+            _price_levels[level_key] = current_level
+            levels_changed = True
+
+    if levels_changed:
+        save_price_levels(_price_levels)
 
     logger.info("주가 체크 완료 — 조회 %d개, 새 알람 %d건", checked, count)
     return count
