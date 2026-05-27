@@ -7,7 +7,7 @@ ticker_manager.py - 티커 및 설정 관리 CLI
   python ticker_manager.py remove TSLA
   python ticker_manager.py set-webhook https://discord.com/api/webhooks/...
   python ticker_manager.py set-interval 300
-  python ticker_manager.py set-openai-key sk-...
+  python ticker_manager.py set-gemini-key AIza...
 
   [트위터 관련]
   python ticker_manager.py twitter-list
@@ -26,10 +26,25 @@ from twitter_fetcher import KNOWN_ACCOUNTS
 
 logger = logging.getLogger(__name__)
 
+CONFIG_FILE = "config.json"
+DEFAULT_GEMINI_MODEL = "gemini-3.1-flash-lite"
 
-def _gemini_find_twitter_accounts(ticker: str, gemini_api_key: str) -> Optional[List[str]]:
+
+def _gemini_model(config: dict, specific_key: str = "") -> str:
+    """config.json에서 Gemini 모델명을 읽습니다."""
+    if specific_key:
+        value = str(config.get(specific_key, "") or "").strip()
+        if value:
+            return value
+    return (
+        str(config.get("gemini_model", "") or "").strip()
+        or DEFAULT_GEMINI_MODEL
+    )
+
+
+def _gemini_find_twitter_accounts(ticker: str, gemini_api_key: str, gemini_model: str) -> Optional[List[str]]:
     """Gemini에게 티커의 공식 트위터 계정을 물어봅니다.
-    
+
     반환: 계정명 리스트 (예: ['nvidia', 'JensenHuang']) 또는 None(실패 시)
     OpenAI 호환 API 사용 (grpcio 의존성 없음, 라즈베리파이 호환).
     """
@@ -42,19 +57,21 @@ def _gemini_find_twitter_accounts(ticker: str, gemini_api_key: str) -> Optional[
         client = OpenAI(
             api_key=gemini_api_key,
             base_url="https://generativelanguage.googleapis.com/v1beta/openai/",
-            max_retries=0,  # 429 시 자동 재시도 비활성화 (쿼터 낭비 방지)
+            max_retries=0,
         )
         prompt = (
             f"주식 티커 '{ticker}'의 공식 트위터(X) 계정 사용자명(username)을 알려주세요.\n"
-            "주식 티커 '{ticker}'의 미국 상장회사 공식 X 계정을 찾아라.암호화폐/코인/블록체인 프로젝트 계정은 제외하라.가능하면 회사명, 거래소, 산업을 기준으로 판단하라.\n"
+            f"주식 티커 '{ticker}'의 미국 상장회사 공식 X 계정을 찾아라. "
+            "암호화폐/코인/블록체인 프로젝트 계정은 제외하라. "
+            "가능하면 회사명, 거래소, 산업을 기준으로 판단하라.\n"
             "회사 공식 계정과 CEO/창립자/주요 임원의 개인 계정을 포함해서 최대 3개까지만 알려주세요.\n"
             "반드시 아래 형식으로만 답하세요 (설명 없이 콤마로 구분된 username만):\n"
             "username1,username2,username3\n\n"
             "존재하지 않거나 모르면 NONE 이라고만 답하세요."
         )
-        logger.info("[Gemini] %s 트위터 계정 탐색 요청", ticker)
+        logger.info("[Gemini] %s 트위터 계정 탐색 요청: model=%s", ticker, gemini_model)
         response = client.chat.completions.create(
-            model="gemini-3.1-flash-lite",
+            model=gemini_model,
             messages=[{"role": "user", "content": prompt}],
         )
         text = response.choices[0].message.content.strip()
@@ -66,10 +83,9 @@ def _gemini_find_twitter_accounts(ticker: str, gemini_api_key: str) -> Optional[
         logger.info("[Gemini] %s 파싱 결과: %s", ticker, accounts)
         return accounts if accounts else None
     except Exception as e:
-        logger.warning("Gemini 트위터 계정 탐색 실패 [%s]: %s", ticker, e)
+        logger.warning("Gemini 트위터 계정 탐색 실패 [%s, model=%s]: %s", ticker, gemini_model, e)
         return None
 
-CONFIG_FILE = "config.json"
 
 DEFAULT_CONFIG = {
     "discord_webhook_url": "YOUR_DISCORD_WEBHOOK_URL_HERE",
@@ -81,6 +97,10 @@ DEFAULT_CONFIG = {
     "monitor_twitter": False,
     "twitter_check_interval_seconds": 600,
     "twitter_accounts": {},
+    "gemini_model": DEFAULT_GEMINI_MODEL,
+    "gemini_relevance_model": DEFAULT_GEMINI_MODEL,
+    "gemini_summary_model": DEFAULT_GEMINI_MODEL,
+    "gemini_twitter_model": DEFAULT_GEMINI_MODEL,
     "nitter_instances": [
         "https://nitter.privacydev.net",
         "https://nitter.poast.org",
@@ -95,7 +115,8 @@ def load_config() -> dict:
     if not os.path.exists(CONFIG_FILE):
         return DEFAULT_CONFIG.copy()
     with open(CONFIG_FILE, "r", encoding="utf-8") as f:
-        return json.load(f)
+        cfg = json.load(f)
+    return cfg
 
 
 def save_config(config: dict) -> None:
@@ -105,7 +126,6 @@ def save_config(config: dict) -> None:
 
 
 # ─── 서브커맨드 ───────────────────────────────────────────────────────────────
-
 def cmd_list(config: dict) -> None:
     webhook = config.get("discord_webhook_url", "")
     webhook_status = "(설정됨)" if webhook and webhook != "YOUR_DISCORD_WEBHOOK_URL_HERE" else "⚠️  (미설정)"
@@ -114,6 +134,10 @@ def cmd_list(config: dict) -> None:
     print("\n┌─── 현재 설정 ───────────────────────────────────────┐")
     print(f"│  Discord Webhook : {webhook_status}")
     print(f"│  뉴스 체크 주기  : {config.get('check_interval_seconds', 300)}초")
+    print(f"│  Gemini 기본 모델: {config.get('gemini_model', DEFAULT_GEMINI_MODEL)}")
+    print(f"│  Gemini 관련성   : {config.get('gemini_relevance_model', config.get('gemini_model', DEFAULT_GEMINI_MODEL))}")
+    print(f"│  Gemini 요약     : {config.get('gemini_summary_model', config.get('gemini_model', DEFAULT_GEMINI_MODEL))}")
+    print(f"│  Gemini 트위터   : {config.get('gemini_twitter_model', config.get('gemini_model', DEFAULT_GEMINI_MODEL))}")
     sec = config.get("monitor_sec_filings", False)
     print(f"│  SEC 공시 모니터 : {'ON  (' + ', '.join(config.get('sec_form_types', [])) + ')' if sec else 'OFF'}")
     if sec:
@@ -138,6 +162,7 @@ def cmd_add(config: dict, tickers: List[str]) -> None:
     existing = set(config.setdefault("tickers", []))
     twitter_accounts: dict = config.setdefault("twitter_accounts", {})
     gemini_api_key = config.get("gemini_api_key", "").strip()
+    twitter_model = _gemini_model(config, "gemini_twitter_model")
     added: List[str] = []
     for t in tickers:
         t = t.upper().strip()
@@ -162,8 +187,8 @@ def cmd_add(config: dict, tickers: List[str]) -> None:
             print(f"  ✅ {t} — 추가됨  (트위터 자동: {accs_str})")
         # 2순위: Gemini로 탐색
         elif gemini_api_key:
-            print(f"  ✅ {t} — 추가됨  (Gemini로 트위터 계정 탐색 중...)")
-            accounts = _gemini_find_twitter_accounts(t, gemini_api_key)
+            print(f"  ✅ {t} — 추가됨  (Gemini로 트위터 계정 탐색 중... model={twitter_model})")
+            accounts = _gemini_find_twitter_accounts(t, gemini_api_key, twitter_model)
             if accounts:
                 twitter_accounts[t] = accounts
                 accs_str = ", ".join("@" + a for a in accounts)
@@ -187,7 +212,6 @@ def cmd_remove(config: dict, tickers: List[str]) -> None:
             print(f"  ⚠️  {t} — 등록되지 않음")
         else:
             existing.remove(t)
-            # 트위터 계정도 같이 삭제
             if t in twitter_accounts:
                 del twitter_accounts[t]
             removed.append(t)
@@ -204,6 +228,19 @@ def cmd_set_gemini_key(config: dict, api_key: str) -> None:
     config["gemini_api_key"] = api_key
     save_config(config)
     print("Gemini API 키 설정 완료! AI 한글 요약 및 트위터 계정 자동 탐색 기능이 활성화됩니다.")
+
+
+def cmd_set_gemini_model(config: dict, model: str) -> None:
+    model = model.strip()
+    if not model:
+        print("⚠️  모델명이 비어있습니다.")
+        sys.exit(1)
+    config["gemini_model"] = model
+    config.setdefault("gemini_relevance_model", model)
+    config.setdefault("gemini_summary_model", model)
+    config.setdefault("gemini_twitter_model", model)
+    save_config(config)
+    print(f"Gemini 기본 모델 설정 완료: {model}")
 
 
 def cmd_set_webhook(config: dict, url: str) -> None:
@@ -232,7 +269,6 @@ def cmd_set_interval(config: dict, seconds_str: str) -> None:
 
 
 # ─── Twitter 관리 명령어 ──────────────────────────────────────────────────────────────
-
 def cmd_twitter_list(config: dict) -> None:
     """티커별 등록된 Twitter 계정 목록 출력."""
     tw_on = config.get("monitor_twitter", False)
@@ -293,7 +329,7 @@ def cmd_twitter_remove(config: dict, ticker: str, usernames: List[str]) -> None:
 
     if removed:
         if not existing:
-            accounts.pop(ticker, None)  # 계정이 비면 키도 제거
+            accounts.pop(ticker, None)
         save_config(config)
 
 
@@ -313,7 +349,6 @@ def cmd_twitter_off(config: dict) -> None:
 
 
 # ─── 메인 ─────────────────────────────────────────────────────────────────────
-
 def print_usage() -> None:
     print(__doc__)
 
@@ -359,6 +394,12 @@ def main() -> None:
             print("사용법: python ticker_manager.py set-gemini-key AIza...")
             sys.exit(1)
         cmd_set_gemini_key(config, args[1])
+
+    elif command == "set-gemini-model":
+        if len(args) < 2:
+            print("사용법: python ticker_manager.py set-gemini-model gemini-3.1-flash-lite")
+            sys.exit(1)
+        cmd_set_gemini_model(config, args[1])
 
     elif command == "twitter-list":
         cmd_twitter_list(config)
