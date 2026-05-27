@@ -7,7 +7,9 @@ news_fetcher.py - 여러 소스에서 뉴스 수집
   finnhub    - Finnhub Company News (무료 API 키: https://finnhub.io/register)
 """
 import calendar
+import json
 import logging
+import re
 import time
 from datetime import date, timedelta
 from typing import Any, Dict, List, Optional
@@ -17,8 +19,112 @@ import requests
 logger = logging.getLogger(__name__)
 
 
+# ── 관련성 필터 ───────────────────────────────────────────────────────────────
+def _is_ticker_relevant(title: str, ticker: str, company_name: str = "") -> bool:
+    """뉴스 제목이 해당 티커와 관련 있는지 확인합니다.
+
+    티커 기호 또는 회사명 핵심 단어가 제목에 포함되면 관련 있음으로 판단합니다.
+    """
+    import re
+    if not title:
+        return False
+    title_lower = title.lower()
+    ticker_lower = ticker.lower()
+
+    # 1. 티커가 단어 경계로 포함 ($AAPL, AAPL:, AAPL stock 등)
+    if re.search(r'(?<![a-zA-Z])' + re.escape(ticker_lower) + r'(?![a-zA-Z])', title_lower):
+        return True
+
+    # 2. 회사명에서 5글자 이상 핵심 단어 추출 후 제목 매칭
+    if company_name:
+        _stop = {"inc", "corp", "ltd", "llc", "co", "the", "and", "of", "a", "an",
+                 "class", "holdings", "group", "international", "services", "systems"}
+        key_words = [
+            w.strip(".,&()-").lower()
+            for w in company_name.split()
+            if len(w.strip(".,&()-")) >= 5 and w.strip(".,&()-").lower() not in _stop
+        ]
+        for kw in key_words[:3]:  # 앞 3개 핵심 단어만 확인
+            if kw in title_lower:
+                return True
+
+    return False
+
+
+# ── Gemini 배치 관련성 필터 ──────────────────────────────────────────────────────
+def _gemini_relevance_filter(
+    items: List[Dict[str, Any]],
+    ticker: str,
+    company_name: str,
+    gemini_api_key: str,
+) -> List[Dict[str, Any]]:
+    """Gemini로 뉴스 관련성을 일괄 판단합니다 (배치 처리 — API 1회 호출).
+
+    모든 기사 제목을 한 번에 전송해 관련 기사 번호 목록을 JSON으로 받습니다.
+    실패 시 원본 목록 전체 반환 (알람은 정상 전송).
+    """
+    if not items or not gemini_api_key:
+        return items
+    try:
+        from openai import OpenAI
+    except ImportError:
+        return items
+
+    titles = [item.get("title", "") for item in items]
+    numbered = "\n".join(f"{i + 1}. {t}" for i, t in enumerate(titles))
+    company_info = f" / {company_name}" if company_name else ""
+
+    prompt = (
+        f"You are a strict stock news relevance filter.\n"
+        f"Target company — Ticker: {ticker}{company_info}\n\n"
+        f"Review each headline and decide if it is DIRECTLY about this specific company.\n\n"
+        f"INCLUDE if the headline:\n"
+        f"- Mentions the company by name or ticker symbol\n"
+        f"- Covers earnings, revenue, guidance, products, or services of this company\n"
+        f"- Mentions CEO/executives of this company\n"
+        f"- Covers M&A, partnerships, lawsuits, or regulatory actions involving this company\n\n"
+        f"EXCLUDE if the headline:\n"
+        f"- Is general market or macroeconomic news (e.g. 'Dow rises', 'Fed rate decision')\n"
+        f"- Covers a sector/industry without specifically mentioning this company\n"
+        f"- Is about competitors only, without directly involving {ticker}\n"
+        f"- Is a listicle/roundup where this company is not the main focus\n\n"
+        f"Headlines:\n{numbered}\n\n"
+        f"Reply with ONLY a JSON array of the relevant headline numbers. Example: [1, 3, 5]\n"
+        f"If none are relevant, reply: []"
+    )
+
+    try:
+        client = OpenAI(
+            api_key=gemini_api_key,
+            base_url="https://generativelanguage.googleapis.com/v1beta/openai/",
+            max_retries=0,
+            timeout=20.0,
+        )
+        response = client.chat.completions.create(
+            model="gemini-2.0-flash-lite",
+            messages=[{"role": "user", "content": prompt}],
+        )
+        raw = response.choices[0].message.content.strip()
+        match = re.search(r'\[[\d,\s]*\]', raw)
+        if not match:
+            logger.warning("[%s] Gemini 관련성 응답 파싱 실패 → 폴백: %s", ticker, raw[:100])
+            return items
+        indices = json.loads(match.group())
+        relevant = [
+            items[i - 1] for i in indices
+            if isinstance(i, int) and 1 <= i <= len(items)
+        ]
+        skipped = len(items) - len(relevant)
+        if skipped > 0:
+            logger.info("[%s] Gemini 관련성 필터: %d건 제외, %d건 통과", ticker, skipped, len(relevant))
+        return relevant
+    except Exception as e:
+        logger.warning("[%s] Gemini 관련성 필터 실패 → 폴백: %s", ticker, e)
+        return items
+
+
 # ── Yahoo Finance RSS ──────────────────────────────────────────────────────────
-def fetch_yahoo_news(ticker: str) -> List[Dict[str, Any]]:
+def fetch_yahoo_news(ticker: str, company_name: str = "") -> List[Dict[str, Any]]:
     """Yahoo Finance RSS 피드에서 해당 티커의 최신 뉴스를 가져옵니다.
     
     yfinance의 stock.news API 대신 공식 RSS 피드를 사용합니다.
@@ -48,13 +154,14 @@ def fetch_yahoo_news(ticker: str) -> List[Dict[str, Any]]:
             raw_id = entry.get("id") or entry.get("link", "")
             if not raw_id:
                 continue
+            title = entry.get("title", "(제목 없음)")
             published = entry.get("published_parsed")
             ts = int(calendar.timegm(published)) if published else 0
             source_obj = getattr(entry, "source", None)
             publisher = getattr(source_obj, "title", "Yahoo Finance") if source_obj else "Yahoo Finance"
             result.append({
                 "id": f"yahoo_rss_{raw_id}",
-                "title": entry.get("title", "(제목 없음)"),
+                "title": title,
                 "link": entry.get("link", ""),
                 "publisher": publisher,
                 "publish_time": ts,
@@ -105,18 +212,6 @@ def fetch_google_news_rss(ticker: str, company_name: str = "") -> List[Dict[str,
             published = entry.get("published_parsed")
             ts = int(calendar.timegm(published)) if published else 0
             title = entry.get("title", "(제목 없음)")
-
-            # 관련성 필터: 제목에 ticker가 포함되지 않고 회사명도 없으면 스킵
-            title_lower = title.lower()
-            ticker_in_title = ticker_upper.lower() in title_lower
-            name_in_title = (
-                company_name.split()[0].lower() in title_lower
-                if company_name
-                else False
-            )
-            if not ticker_in_title and not name_in_title:
-                logger.debug("[%s] Google News 관련성 낮아 스킵: %s", ticker, title[:60])
-                continue
 
             result.append({
                 "id": f"gnews_{raw_id}",
@@ -184,9 +279,9 @@ def fetch_all_news(ticker: str, config: dict) -> List[Dict[str, Any]]:
     sources = config.get("news_sources", ["yahoo", "google_rss"])
     finnhub_key = config.get("finnhub_api_key", "").strip()
 
-    # Yahoo Finance에서 회사명을 가져와 Google News 검색 정확도 향상
+    # 회사명 조회 (Yahoo/Google 필터링 및 Google News 검색 정확도 향상)
     company_name = ""
-    if "google_rss" in sources:
+    if "google_rss" in sources or "yahoo" in sources:
         try:
             from price_fetcher import fetch_price
             info = fetch_price(ticker)
@@ -215,13 +310,24 @@ def fetch_all_news(ticker: str, config: dict) -> List[Dict[str, Any]]:
             all_items.append(item)
 
     if "yahoo" in sources:
-        _add(fetch_yahoo_news(ticker))
+        _add(fetch_yahoo_news(ticker, company_name))
 
     if "google_rss" in sources:
         _add(fetch_google_news_rss(ticker, company_name))
 
     if "finnhub" in sources and finnhub_key:
         _add(fetch_finnhub_news(ticker, finnhub_key))
+
+    # ── 관련성 필터: Gemini 배치 판단 (없으면 regex 폴백) ─────────────────────
+    gemini_key = config.get("gemini_api_key", "").strip()
+    if all_items:
+        if gemini_key:
+            all_items = _gemini_relevance_filter(all_items, ticker, company_name, gemini_key)
+        else:
+            all_items = [
+                item for item in all_items
+                if _is_ticker_relevant(item.get("title", ""), ticker.upper(), company_name)
+            ]
 
     # ── 시간 필터: 설정된 시간(기본 24시간)보다 오래된 뉴스 제외 ──────────────
     max_age_hours = config.get("news_max_age_hours", 24)
