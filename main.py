@@ -150,20 +150,32 @@ def _normalize_news_title(title: str) -> str:
     약간 다른 구분자를 쓰는 경우가 많아, 의미 없는 접미사와 특수문자를 제거합니다.
     """
     normalized = (title or "").lower().strip()
+    normalized = normalized.replace("’", "'").replace("‘", "'")
+    normalized = normalized.replace("“", '"').replace("”", '"')
 
     # RSS가 붙이는 출처/매체 접미사 제거
     suffixes = [
-        "yahoo finance", "the motley fool", "motley fool", "barron's",
-        "barrons", "benzinga", "reuters", "marketwatch", "investor's business daily",
-        "investors business daily", "seeking alpha", "zacks", "globenewswire",
-        "business wire", "pr newswire", "cnbc", "msn", "google news",
+        "yahoo finance", "the motley fool", "motley fool",
+        "24/7 wall st.", "24/7 wall st", "247 wall st.", "247 wall st", "wall st.", "wall st",
+        "barron's", "barrons", "benzinga", "reuters", "marketwatch",
+        "investor's business daily", "investors business daily", "seeking alpha", "zacks",
+        "globenewswire", "business wire", "pr newswire", "cnbc", "msn", "google news",
+        "ap news", "associated press", "morningstar", "investopedia", "kiplinger",
+        "nasdaq", "gurufocus", "thestreet", "the street",
     ]
-    normalized = re.sub(r"\s+[-|–—:]\s+(" + "|".join(re.escape(s) for s in suffixes) + r")\s*$", "", normalized)
-    normalized = re.sub(r"\s+\((" + "|".join(re.escape(s) for s in suffixes) + r")\)\s*$", "", normalized)
+    publisher_pattern = "|".join(re.escape(s) for s in suffixes)
+    normalized = re.sub(r"\s+[-|–—:]\s+(" + publisher_pattern + r")\s*$", "", normalized)
+    normalized = re.sub(r"\s+\((" + publisher_pattern + r")\)\s*$", "", normalized)
+
+    # 조금 더 넓은 매체명 접미사 패턴. 예: " - Some Market Report", " - ABC News"
+    normalized = re.sub(
+        r"\s+[-|–—:]\s+[a-z0-9&.,' /]{2,45}\s+(news|finance|wire|journal|times|post|daily|report|reports|media|market|markets|street|st\.?)\.?\s*$",
+        "",
+        normalized,
+    )
 
     # 티커 태그, 따옴표/소유격/특수문자 정리
     normalized = re.sub(r"^\[[a-z]{1,6}\]\s*", "", normalized)
-    normalized = normalized.replace("’", "'")
     normalized = normalized.replace("'s", "s")
     normalized = re.sub(r"[^a-z0-9가-힣]+", " ", normalized)
     normalized = re.sub(r"\s+", " ", normalized).strip()
@@ -436,10 +448,11 @@ def check_tweets(config: dict, seen: Set[str], initial: bool = False) -> int:
     global_accounts: list = config.get("twitter_accounts", {}).get("_GLOBAL_", [])
     if global_accounts:
         from twitter_fetcher import fetch_twitter_timeline
-        max_age_hours = config.get("tweet_max_age_hours", 24)
+        max_age_hours = config.get("global_tweet_max_age_hours", config.get("tweet_max_age_hours", 24))
+        stale_hours = config.get("global_twitter_stale_max_age_hours", config.get("twitter_stale_max_age_hours", 24))
         cutoff_ts = int(time.time()) - (max_age_hours * 3600) if max_age_hours > 0 else 0
         for username in global_accounts:
-            tweets = fetch_twitter_timeline(username)
+            tweets = fetch_twitter_timeline(username, stale_max_age_hours=stale_hours, config=config)
             for tweet in tweets:
                 if cutoff_ts and tweet.get("publish_time", 0) < cutoff_ts:
                     logger.info("[GLOBAL] @%s 트윗 시간 초과 skip (publish_time=%s, cutoff=%s)", username, tweet.get("publish_time"), cutoff_ts)
