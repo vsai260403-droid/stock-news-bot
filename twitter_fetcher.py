@@ -7,12 +7,19 @@ twitter_fetcher.py - 트위터/X 타임라인 수집
 Twitter API 키 불필요.
 """
 import calendar
+import json
 import logging
+import os
 import re
 import time
+from datetime import datetime
+from zoneinfo import ZoneInfo
 from typing import Any, Dict, List, Optional
 
 logger = logging.getLogger(__name__)
+
+CONFIG_FILE = "config.json"
+DEFAULT_TWITTER_STALE_MAX_AGE_HOURS = 24
 
 _RSSHUB_INSTANCES: List[str] = [
     "https://rsshub.app",
@@ -50,6 +57,81 @@ _BROWSER_HEADERS = {
     "Accept-Encoding": "gzip, deflate",
     "Connection": "keep-alive",
 }
+
+
+def _load_config() -> Dict[str, Any]:
+    try:
+        if os.path.exists(CONFIG_FILE):
+            with open(CONFIG_FILE, "r", encoding="utf-8") as f:
+                data = json.load(f)
+            return data if isinstance(data, dict) else {}
+    except Exception as e:
+        logger.info("트위터 설정 로드 실패: %s", e)
+    return {}
+
+
+def _configured_stale_hours(username: str, config: Optional[dict] = None) -> int:
+    """계정별 stale 판정 시간을 config에서 가져옵니다.
+
+    GLOBAL 계정은 global_twitter_stale_max_age_hours를 우선 사용하고,
+    일반 티커 계정은 twitter_stale_max_age_hours를 사용합니다.
+    """
+    cfg = config if isinstance(config, dict) else _load_config()
+    username_norm = username.lstrip("@").lower()
+    global_accounts = [a.lstrip("@").lower() for a in cfg.get("twitter_accounts", {}).get("_GLOBAL_", [])]
+
+    if username_norm in global_accounts:
+        value = cfg.get("global_twitter_stale_max_age_hours", cfg.get("twitter_stale_max_age_hours", DEFAULT_TWITTER_STALE_MAX_AGE_HOURS))
+    else:
+        value = cfg.get("twitter_stale_max_age_hours", DEFAULT_TWITTER_STALE_MAX_AGE_HOURS)
+
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return DEFAULT_TWITTER_STALE_MAX_AGE_HOURS
+
+
+def _fmt_kst(ts: int) -> str:
+    if not ts:
+        return "N/A"
+    try:
+        return datetime.fromtimestamp(ts, ZoneInfo("Asia/Seoul")).strftime("%Y-%m-%d %H:%M:%S KST")
+    except Exception:
+        return str(ts)
+
+
+def _newest_age_hours(items: List[Dict[str, Any]]) -> Optional[float]:
+    timestamps = [int(t.get("publish_time", 0) or 0) for t in items]
+    timestamps = [t for t in timestamps if t > 0]
+    if not timestamps:
+        return None
+    newest = max(timestamps)
+    return (time.time() - newest) / 3600
+
+
+def _is_stale_result(username: str, instance: str, items: List[Dict[str, Any]], stale_max_age_hours: int) -> bool:
+    """수집 결과가 오래된 캐시뿐이면 stale로 판단합니다."""
+    if not items or stale_max_age_hours <= 0:
+        return False
+
+    timestamps = [int(t.get("publish_time", 0) or 0) for t in items if int(t.get("publish_time", 0) or 0) > 0]
+    if not timestamps:
+        logger.warning("[@%s] %s stale 의심: publish_time이 있는 트윗이 없음", username, instance)
+        return True
+
+    newest_ts = max(timestamps)
+    age_hours = (time.time() - newest_ts) / 3600
+    if age_hours > stale_max_age_hours:
+        logger.warning(
+            "[@%s] %s stale: 최신 트윗=%s, age=%.1fh, limit=%dh → 다음 인스턴스 시도",
+            username,
+            instance,
+            _fmt_kst(newest_ts),
+            age_hours,
+            stale_max_age_hours,
+        )
+        return True
+    return False
 
 
 def get_healthy_instances() -> List[str]:
@@ -222,21 +304,44 @@ def probe_instance(instance: str, username: str, timeout: int = 8) -> Dict[str, 
 def fetch_twitter_timeline(
     username: str,
     nitter_instances: Optional[List[str]] = None,
+    stale_max_age_hours: Optional[int] = None,
+    config: Optional[dict] = None,
 ) -> List[Dict[str, Any]]:
-    """RSSHub → Nitter 순으로 시도하여 트위터 타임라인을 가져옵니다."""
+    """RSSHub/Nitter에서 트위터 타임라인을 가져옵니다.
+
+    단순히 1개 이상 받았다고 성공 처리하지 않고, 최신 트윗이 너무 오래된
+    stale 인스턴스는 실패 취급하고 다음 인스턴스를 계속 시도합니다.
+    """
     instances = nitter_instances or get_healthy_instances()
+    stale_limit = stale_max_age_hours if stale_max_age_hours is not None else _configured_stale_hours(username, config)
+    stale_candidates: List[str] = []
 
     for instance in instances:
         if _is_rsshub_instance(instance):
             result = _try_fetch_rss_rsshub(instance, username)
         else:
             result = _try_fetch_rss_nitter(instance, username)
+
         if result:
-            logger.info("[@%s] %d개 트윗 수집 성공 (%s)", username, len(result), instance)
+            if _is_stale_result(username, instance, result, stale_limit):
+                stale_candidates.append(instance)
+                time.sleep(0.3)
+                continue
+            newest_age = _newest_age_hours(result)
+            age_text = f", newest_age={newest_age:.1f}h" if newest_age is not None else ""
+            logger.info("[@%s] %d개 트윗 수집 성공 (%s%s)", username, len(result), instance, age_text)
             return result
         time.sleep(0.3)
 
-    logger.warning("[@%s] 모든 인스턴스에서 수집 실패", username)
+    if stale_candidates:
+        logger.warning(
+            "[@%s] 모든 인스턴스 실패 또는 stale (stale_limit=%dh, stale=%s)",
+            username,
+            stale_limit,
+            ", ".join(stale_candidates),
+        )
+    else:
+        logger.warning("[@%s] 모든 인스턴스에서 수집 실패", username)
     return []
 
 
@@ -250,9 +355,11 @@ def fetch_all_tweets(ticker: str, config: dict) -> List[Dict[str, Any]]:
     if not usernames:
         return []
 
+    stale_max_age_hours = int(config.get("twitter_stale_max_age_hours", DEFAULT_TWITTER_STALE_MAX_AGE_HOURS) or DEFAULT_TWITTER_STALE_MAX_AGE_HOURS)
+
     result: List[Dict[str, Any]] = []
     for username in usernames:
-        tweets = fetch_twitter_timeline(username)
+        tweets = fetch_twitter_timeline(username, stale_max_age_hours=stale_max_age_hours, config=config)
         for tweet in tweets:
             tweet["ticker"] = ticker.upper()
         result.extend(tweets)
@@ -260,7 +367,6 @@ def fetch_all_tweets(ticker: str, config: dict) -> List[Dict[str, Any]]:
             time.sleep(0.5)
 
     # 시간 필터: 최근 트윗만 알림 대상으로 유지합니다.
-    # 기본값을 6시간으로 줄여서 전날 트윗이 새 알림처럼 오는 상황을 줄입니다.
     max_age_hours = config.get("tweet_max_age_hours", 6)
     if max_age_hours > 0:
         cutoff_ts = int(time.time()) - (max_age_hours * 3600)
