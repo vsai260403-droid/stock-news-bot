@@ -8,6 +8,7 @@ import logging
 import logging.handlers
 import os
 import hashlib
+import re
 import time
 import schedule
 
@@ -142,10 +143,40 @@ def save_price_levels(levels: Dict[str, int]) -> None:
         logger.warning("주가 알림 기록 저장 실패: %s", e)
 
 
+def _normalize_news_title(title: str) -> str:
+    """재배포 기사 중복 제거용 제목 정규화.
+
+    Yahoo Finance/Google News가 원출처 기사 제목 뒤에 매체명을 붙이거나
+    약간 다른 구분자를 쓰는 경우가 많아, 의미 없는 접미사와 특수문자를 제거합니다.
+    """
+    normalized = (title or "").lower().strip()
+
+    # RSS가 붙이는 출처/매체 접미사 제거
+    suffixes = [
+        "yahoo finance", "the motley fool", "motley fool", "barron's",
+        "barrons", "benzinga", "reuters", "marketwatch", "investor's business daily",
+        "investors business daily", "seeking alpha", "zacks", "globenewswire",
+        "business wire", "pr newswire", "cnbc", "msn", "google news",
+    ]
+    normalized = re.sub(r"\s+[-|–—:]\s+(" + "|".join(re.escape(s) for s in suffixes) + r")\s*$", "", normalized)
+    normalized = re.sub(r"\s+\((" + "|".join(re.escape(s) for s in suffixes) + r")\)\s*$", "", normalized)
+
+    # 티커 태그, 따옴표/소유격/특수문자 정리
+    normalized = re.sub(r"^\[[a-z]{1,6}\]\s*", "", normalized)
+    normalized = normalized.replace("’", "'")
+    normalized = normalized.replace("'s", "s")
+    normalized = re.sub(r"[^a-z0-9가-힣]+", " ", normalized)
+    normalized = re.sub(r"\s+", " ", normalized).strip()
+    return normalized
+
+
 def _title_hash(title: str) -> str:
-    """뉴스 제목의 해시 키를 반환합니다 (ID가 바뀌어도 동일 기사 중복 전송 방지)."""
-    normalized = title.lower().strip()
-    return "title_" + hashlib.md5(normalized.encode("utf-8")).hexdigest()[:16]
+    """뉴스 제목의 정규화 해시 키를 반환합니다.
+
+    ID가 다르고 소스가 달라도 제목이 같은 재배포 기사는 같은 키가 됩니다.
+    """
+    normalized = _normalize_news_title(title)
+    return "title_norm_" + hashlib.md5(normalized.encode("utf-8")).hexdigest()[:16]
 
 
 def _price_session_id(info: dict) -> str:
@@ -292,7 +323,12 @@ def check_news(config: dict, seen: Set[str], initial: bool = False) -> int:
             seen.add(item_id)
             seen.add(title_hash)
             if already_seen:
-                logger.info("[%s] 뉴스 제외: 이미 seen — %s", ticker, item.get("title", "")[:120])
+                logger.info(
+                    "[%s] 뉴스 제외: 이미 seen 또는 재배포 중복 — %s | key=%s",
+                    ticker,
+                    item.get("title", "")[:120],
+                    title_hash,
+                )
                 continue
             if not initial:
                 if gemini_api_key:
