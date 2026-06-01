@@ -42,7 +42,7 @@ def _gemini_model(config: dict, specific_key: str = "") -> str:
     )
 
 
-def _gemini_find_twitter_accounts(ticker: str, gemini_api_key: str, gemini_model: str) -> Optional[List[str]]:
+def _gemini_find_twitter_accounts(ticker: str, gemini_api_key: str, gemini_model: str = DEFAULT_GEMINI_MODEL) -> Optional[List[str]]:
     """Gemini에게 티커의 공식 트위터 계정을 물어봅니다.
 
     반환: 계정명 리스트 (예: ['nvidia', 'JensenHuang']) 또는 None(실패 시)
