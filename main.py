@@ -146,14 +146,32 @@ def save_price_levels(levels: Dict[str, int]) -> None:
 def _normalize_news_title(title: str) -> str:
     """재배포 기사 중복 제거용 제목 정규화.
 
-    Yahoo Finance/Google News가 원출처 기사 제목 뒤에 매체명을 붙이거나
-    약간 다른 구분자를 쓰는 경우가 많아, 의미 없는 접미사와 특수문자를 제거합니다.
+    출처명이 제목 끝에 붙는 케이스를 일반 규칙으로 제거합니다.
+    예:
+      Why SoFi Stock Soared 13% in May
+      Why SoFi Stock Soared 13% in May - AOL.com
+      Why SoFi Stock Soared 13% in May - Yahoo Finance
+      Why SoFi Stock Soared 13% in May | The Motley Fool
+    위 케이스들이 같은 title_norm 키가 되도록 정규화합니다.
     """
     normalized = (title or "").lower().strip()
     normalized = normalized.replace("’", "'").replace("‘", "'")
     normalized = normalized.replace("“", '"').replace("”", '"')
+    normalized = normalized.replace("–", "-").replace("—", "-")
 
-    # RSS가 붙이는 출처/매체 접미사 제거
+    # 티커 태그 제거
+    normalized = re.sub(r"^\[[a-z]{1,8}\]\s*", "", normalized)
+
+    # 끝에 붙은 URL/도메인형 출처 제거
+    # 예: " - AOL.com", " | investing.com", " - fool.com"
+    normalized = re.sub(
+        r"\s+[-|:]\s+[a-z0-9][a-z0-9&.,' /-]{0,45}\."
+        r"(com|net|org|io|ai|co|news|finance)\s*$",
+        "",
+        normalized,
+    )
+
+    # RSS가 붙이는 대표 출처/매체 접미사 제거
     suffixes = [
         "yahoo finance", "the motley fool", "motley fool",
         "24/7 wall st.", "24/7 wall st", "247 wall st.", "247 wall st", "wall st.", "wall st",
@@ -164,23 +182,37 @@ def _normalize_news_title(title: str) -> str:
         "nasdaq", "gurufocus", "thestreet", "the street",
     ]
     publisher_pattern = "|".join(re.escape(s) for s in suffixes)
-    normalized = re.sub(r"\s+[-|–—:]\s+(" + publisher_pattern + r")\s*$", "", normalized)
+    normalized = re.sub(r"\s+[-|:]\s+(" + publisher_pattern + r")\s*$", "", normalized)
     normalized = re.sub(r"\s+\((" + publisher_pattern + r")\)\s*$", "", normalized)
 
-    # 조금 더 넓은 매체명 접미사 패턴. 예: " - Some Market Report", " - ABC News"
+    # 조금 더 넓은 매체명 접미사 패턴
+    # 예: " - ABC News", " - Some Market Report"
     normalized = re.sub(
-        r"\s+[-|–—:]\s+[a-z0-9&.,' /]{2,45}\s+(news|finance|wire|journal|times|post|daily|report|reports|media|market|markets|street|st\.?)\.?\s*$",
+        r"\s+[-|:]\s+[a-z0-9&.,' /-]{2,45}\s+"
+        r"(news|finance|wire|journal|times|post|daily|report|reports|media|market|markets|street|st\.?)\.?\s*$",
         "",
         normalized,
     )
 
-    # 티커 태그, 따옴표/소유격/특수문자 정리
-    normalized = re.sub(r"^\[[a-z]{1,6}\]\s*", "", normalized)
+    # 남은 출처형 짧은 꼬리 제거
+    # 예: " - marketbeat", " | stock titan" 같은 짧은 publisher 꼬리
+    m = re.search(r"\s+[-|:]\s+([a-z0-9&.,' /-]{2,35})$", normalized)
+    if m:
+        suffix = m.group(1).strip()
+        suffix_words = suffix.split()
+        looks_like_publisher = (
+            len(suffix_words) <= 4
+            and not any(ch.isdigit() for ch in suffix)
+            and len(normalized[:m.start()].split()) >= 4
+        )
+        if looks_like_publisher:
+            normalized = normalized[:m.start()].strip()
+
+    # 따옴표/소유격/특수문자 정리
     normalized = normalized.replace("'s", "s")
     normalized = re.sub(r"[^a-z0-9가-힣]+", " ", normalized)
     normalized = re.sub(r"\s+", " ", normalized).strip()
     return normalized
-
 
 def _title_hash(title: str) -> str:
     """뉴스 제목의 정규화 해시 키를 반환합니다.
