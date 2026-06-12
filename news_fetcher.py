@@ -16,6 +16,8 @@ from typing import Any, Dict, List, Optional
 
 import requests
 
+from ai_provider import ai_generate_with_fallback
+
 logger = logging.getLogger(__name__)
 
 
@@ -96,26 +98,15 @@ def _local_relevance_filter(
 
 
 # ── Gemini 배치 관련성 필터 ──────────────────────────────────────────────────────
-def _gemini_relevance_filter(
+def _ai_relevance_filter(
     items: List[Dict[str, Any]],
     ticker: str,
     company_name: str,
-    gemini_api_key: str,
-    gemini_model: str,
+    config: dict,
 ) -> Optional[List[Dict[str, Any]]]:
-    """Gemini로 뉴스 관련성을 일괄 판단합니다 (배치 처리 — API 1회 호출).
-
-    성공하면 관련 기사 리스트를 반환합니다.
-    실패하면 None을 반환하여 호출부에서 로컬 필터로 안전하게 폴백합니다.
-    """
-    if not items or not gemini_api_key:
+    """OAuth 우선, Gemini fallback으로 뉴스 관련성을 배치 판단합니다."""
+    if not items:
         return items
-
-    try:
-        from openai import OpenAI
-    except ImportError:
-        logger.warning("[%s] openai 패키지 없음 → Gemini 관련성 필터 생략, 로컬 필터로 폴백", ticker)
-        return None
 
     titles = [item.get("title", "") for item in items]
     numbered = "\n".join(f"{i + 1}. {t}" for i, t in enumerate(titles))
@@ -136,53 +127,57 @@ def _gemini_relevance_filter(
         f"- Is about competitors only, without directly involving {ticker}\n"
         f"- Is a listicle/roundup where this company is not the main focus\n\n"
         f"Headlines:\n{numbered}\n\n"
-        f"Reply with ONLY a JSON array of the relevant headline numbers. Example: [1, 3, 5]\n"
+        f"Reply with ONLY a JSON array of the relevant headline numbers. "
+        f"Example: [1, 3, 5]\n"
         f"If none are relevant, reply: []"
     )
 
-    try:
-        logger.info("[%s] Gemini 관련성 필터 호출: model=%s, items=%d", ticker, gemini_model, len(items))
-        client = OpenAI(
-            api_key=gemini_api_key,
-            base_url="https://generativelanguage.googleapis.com/v1beta/openai/",
-            max_retries=0,
-            timeout=20.0,
-        )
-        response = client.chat.completions.create(
-            model=gemini_model,
-            messages=[{"role": "user", "content": prompt}],
-        )
-        raw = response.choices[0].message.content.strip()
-        match = re.search(r"\[[\d,\s]*\]", raw)
-        if not match:
-            logger.warning("[%s] Gemini 관련성 응답 파싱 실패 → 로컬 필터로 폴백: %s", ticker, raw[:120])
-            return None
-
-        indices = json.loads(match.group())
-        relevant = [
-            items[i - 1]
-            for i in indices
-            if isinstance(i, int) and 1 <= i <= len(items)
-        ]
-
-        kept_ids = {id(item) for item in relevant}
-        for item in items:
-            if id(item) not in kept_ids:
-                logger.info(
-                    "[%s] 뉴스 제외: Gemini 관련성 필터 탈락 — %s | source=%s",
-                    ticker,
-                    item.get("title", "")[:140],
-                    item.get("source", ""),
-                )
-
-        skipped = len(items) - len(relevant)
-        if skipped > 0:
-            logger.info("[%s] Gemini 관련성 필터: %d건 제외, %d건 통과", ticker, skipped, len(relevant))
-        return relevant
-
-    except Exception as e:
-        logger.warning("[%s] Gemini 관련성 필터 실패 → 로컬 필터로 폴백: %s", ticker, e)
+    raw = ai_generate_with_fallback(
+        prompt,
+        config,
+        purpose=f"{ticker} 관련성 필터",
+    )
+    if not raw:
         return None
+
+    match = re.search(r"\[[\d,\s]*\]", raw)
+    if not match:
+        logger.warning(
+            "[%s] AI 관련성 응답 파싱 실패 → 로컬 필터로 폴백: %s",
+            ticker,
+            raw[:160],
+        )
+        return None
+
+    try:
+        indices = json.loads(match.group())
+    except Exception as exc:
+        logger.warning("[%s] AI 관련성 JSON 파싱 실패: %s", ticker, exc)
+        return None
+
+    relevant = [
+        items[i - 1]
+        for i in indices
+        if isinstance(i, int) and 1 <= i <= len(items)
+    ]
+
+    kept_ids = {id(item) for item in relevant}
+    for item in items:
+        if id(item) not in kept_ids:
+            logger.info(
+                "[%s] 뉴스 제외: AI 관련성 필터 탈락 — %s | source=%s",
+                ticker,
+                item.get("title", "")[:140],
+                item.get("source", ""),
+            )
+
+    logger.info(
+        "[%s] AI 관련성 필터: %d건 제외, %d건 통과",
+        ticker,
+        len(items) - len(relevant),
+        len(relevant),
+    )
+    return relevant
 
 
 # ── Yahoo Finance RSS ──────────────────────────────────────────────────────────
@@ -381,28 +376,23 @@ def fetch_all_news(ticker: str, config: dict) -> List[Dict[str, Any]]:
 
     logger.info("[%s] 뉴스 수집 합계: %d건", ticker, len(all_items))
 
-    # 관련성 필터: Gemini 성공 시 Gemini 결과 사용, 실패/429 시 로컬 필터로 폴백
-    gemini_key = config.get("gemini_api_key", "").strip()
-    relevance_model = (
-        config.get("gemini_relevance_model")
-        or config.get("gemini_model")
-        or "gemini-3.1-flash-lite"
-    )
+    # 관련성 필터: OAuth 우선 → Gemini fallback → 로컬 regex fallback
     if all_items:
-        if gemini_key:
-            filtered = _gemini_relevance_filter(
-                all_items, ticker, company_name, gemini_key, relevance_model
-            )
-            if filtered is None:
-                all_items = _local_relevance_filter(
-                    all_items, ticker.upper(), company_name, reason="gemini_failed_fallback"
-                )
-            else:
-                all_items = filtered
-        else:
+        filtered = _ai_relevance_filter(
+            all_items,
+            ticker,
+            company_name,
+            config,
+        )
+        if filtered is None:
             all_items = _local_relevance_filter(
-                all_items, ticker.upper(), company_name, reason="no_gemini_key"
+                all_items,
+                ticker.upper(),
+                company_name,
+                reason="all_ai_providers_failed",
             )
+        else:
+            all_items = filtered
 
     # 시간 필터: 설정된 시간(기본 24시간)보다 오래된 뉴스 제외
     max_age_hours = config.get("news_max_age_hours", 24)
@@ -432,67 +422,44 @@ def fetch_all_news(ticker: str, config: dict) -> List[Dict[str, Any]]:
 def ai_summarize_news(
     title: str,
     publisher: str,
-    gemini_api_key: str,
+    gemini_api_key: str = "",
     gemini_model: Optional[str] = None,
+    config: Optional[dict] = None,
 ) -> Optional[str]:
-    """Google Gemini API로 영문 뉴스 제목을 한국어로 번역·요약합니다."""
-    if not gemini_api_key:
-        return None
-    try:
-        from openai import OpenAI
-    except ImportError:
-        logger.warning("openai 패키지 미설치 → pip install openai  (AI 요약 비활성화)")
-        return None
+    """OAuth 우선, Gemini fallback으로 뉴스·SEC·트윗을 번역·요약합니다."""
+    effective_config = dict(config or {})
 
-    model = gemini_model or "gemini-3.1-flash-lite"
-    try:
-        client = OpenAI(
-            api_key=gemini_api_key,
-            base_url="https://generativelanguage.googleapis.com/v1beta/openai/",
-            max_retries=0,
-            timeout=30.0,
+    # 기존 호출부와의 호환성 유지
+    if gemini_api_key and not effective_config.get("gemini_api_key"):
+        effective_config["gemini_api_key"] = gemini_api_key
+    if gemini_model and not effective_config.get("gemini_summary_model"):
+        effective_config["gemini_summary_model"] = gemini_model
+
+    if "\n\n" in title and len(title) > 200:
+        prompt = (
+            "당신은 주식 투자자를 위한 SEC 공시 요약 도우미입니다. "
+            "아래는 SEC EDGAR 공시 문서의 실제 본문입니다. "
+            "투자자에게 중요한 핵심 수치(매출, 순이익, EPS, 가이던스 등)와 "
+            "주요 이벤트를 한국어로 간결하게 요약해주세요. "
+            "일반론이 아닌 이 문서의 구체적인 내용을 요약해야 합니다.\n"
+            "그 다음 줄바꿈 후, 투자자 시각에서 짧고 재치있는 한마디를 "
+            "➡️ 이모지와 함께 한 줄로 추가해 주세요.\n\n"
+            f"출처: {publisher}\n{title}"
         )
-        if "\n\n" in title and len(title) > 200:
-            prompt = (
-                "당신은 주식 투자자를 위한 SEC 공시 요약 도우미입니다. "
-                "아래는 SEC EDGAR 공시 문서의 실제 본문입니다. "
-                "투자자에게 중요한 핵심 수치(매출, 순이익, EPS, 가이던스 등)와 "
-                "주요 이벤트를 한국어로 간결하게 요약해주세요. "
-                "일반론이 아닌 이 문서의 구체적인 내용을 요약해야 합니다.\n"
-                "그 다음 줄바꿈 후, 투자자 시각에서 짧고 재치있는 한마디를 "
-                "➡️ 이모지와 함께 한 줄로 추가해 주세요.\n\n"
-                f"출처: {publisher}\n{title}"
-            )
-        else:
-            prompt = (
-                "당신은 주식 투자자를 위한 뉴스 번역·요약 도우미입니다. "
-                "영어 뉴스 제목과 출처를 받으면, "
-                "한국어로 자연스럽게 번역하고 투자자에게 중요한 핵심 내용을 "
-                "간결하게 설명해 주세요. 무슨 내용인지 충분히 요약되어서 설명되어야해요\n"
-                "그 다음 줄바꿈 후, 이 뉴스에 대해 일반 투자자 시각에서 "
-                "짧고 재치있는 한마디를 ➡️ 이모지와 함께 한 줄로 추가해 주세요. "
-                "예: ➡️ \"실적 발표 앞두고 긴장되는 구간이네요 😅\"\n\n"
-                f"출처: {publisher}\n제목: {title}"
-            )
+    else:
+        prompt = (
+            "당신은 주식 투자자를 위한 뉴스 번역·요약 도우미입니다. "
+            "영어 뉴스 제목과 출처를 받으면, "
+            "한국어로 자연스럽게 번역하고 투자자에게 중요한 핵심 내용을 "
+            "충분히 이해할 수 있도록 간결하게 설명해 주세요.\n"
+            "그 다음 줄바꿈 후, 이 뉴스에 대해 일반 투자자 시각에서 "
+            "짧고 재치있는 한마디를 ➡️ 이모지와 함께 한 줄로 추가해 주세요.\n\n"
+            f"출처: {publisher}\n제목: {title}"
+        )
 
-        max_retries = 3
-        for attempt in range(1, max_retries + 1):
-            try:
-                logger.info("AI 요약 호출: model=%s, publisher=%s", model, publisher)
-                response = client.chat.completions.create(
-                    model=model,
-                    messages=[{"role": "user", "content": prompt}],
-                )
-                return response.choices[0].message.content.strip()
-            except Exception as e:
-                err_str = str(e)
-                is_503 = "503" in err_str or "Service Unavailable" in err_str or "high demand" in err_str.lower()
-                if is_503 and attempt < max_retries:
-                    logger.warning("AI 요약 503 에러 (시도 %d/%d) — 30초 후 재시도: %s", attempt, max_retries, e)
-                    time.sleep(30)
-                else:
-                    logger.warning("AI 요약 실패 (시도 %d/%d, model=%s): %s", attempt, max_retries, model, e)
-                    return None
-    except Exception as e:
-        logger.warning("AI 요약 클라이언트 생성 실패: %s", e)
-        return None
+    return ai_generate_with_fallback(
+        prompt,
+        effective_config,
+        purpose="요약",
+    )
+

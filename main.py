@@ -381,6 +381,7 @@ def check_news(config: dict, seen: Set[str], initial: bool = False) -> int:
                         item.get("publisher", ""),
                         gemini_api_key,
                         gemini_model,
+                        config=config,
                     )
                 if send_news_alert(webhook_url, item):
                     count += 1
@@ -431,6 +432,7 @@ def check_sec(config: dict, seen: Set[str], initial: bool = False) -> int:
                         "SEC EDGAR",
                         gemini_api_key,
                         gemini_model,
+                        config=config,
                     )
                 if send_sec_alert(webhook_url, item):
                     count += 1
