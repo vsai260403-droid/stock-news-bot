@@ -289,9 +289,9 @@ def check_prices(config: dict) -> int:
         direction = "up" if change_pct >= 0 else "down"
         current_level = int(abs(change_pct) / threshold) if threshold > 0 else 0
 
-        if market_state not in ("REGULAR", "PRE", "POST"):
+        if market_state not in ("REGULAR", "PRE", "POST", "CLOSED"):
             logger.info(
-                "[%s] 주가 체크 스킵: market=%s (REGULAR/PRE/POST 아님)",
+                "[%s] 주가 체크 스킵: market=%s (지원하는 장 상태 아님)",
                 ticker, market_state,
             )
             continue

@@ -91,10 +91,25 @@ def _select_price_and_base(
         price_source = "regularMarketPrice" if regular_price is not None else "chart_close"
         prev_source = "chartPreviousClose" if chart_prev is not None else ("regularMarketPreviousClose" if regular_prev is not None else "previousClose")
     else:
-        price = latest_price or regular_price or pre_price or post_price
-        prev_close = chart_prev or regular_prev or previous_close or regular_price
-        price_source = "chart_close" if latest_price is not None else "regularMarketPrice"
-        prev_source = "chartPreviousClose" if chart_prev is not None else ("regularMarketPreviousClose" if regular_prev is not None else "previousClose")
+        # CLOSED/NIGHT에는 1분봉 종가가 소수점 단위로 어긋날 수 있으므로
+        # Yahoo가 제공하는 공식 regularMarketPrice를 우선 사용합니다.
+        price = regular_price or post_price or pre_price or latest_price
+        prev_close = chart_prev or regular_prev or previous_close
+        if regular_price is not None:
+            price_source = "regularMarketPrice"
+        elif post_price is not None:
+            price_source = "postMarketPrice"
+        elif pre_price is not None:
+            price_source = "preMarketPrice"
+        else:
+            price_source = "chart_close"
+
+        if chart_prev is not None:
+            prev_source = "chartPreviousClose"
+        elif regular_prev is not None:
+            prev_source = "regularMarketPreviousClose"
+        else:
+            prev_source = "previousClose"
 
     if market_state in ("PRE", "POST") and regular_price is not None and chart_prev is not None:
         diff_pct = abs(regular_price - chart_prev) / chart_prev * 100 if chart_prev else 0.0
