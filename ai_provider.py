@@ -265,7 +265,13 @@ def chatgpt_oauth_generate(prompt: str, config: dict) -> str:
         if not raw_line:
             continue
 
-        line = raw_line.strip()
+        # requests가 SSE 응답을 bytes로 반환하는 경우가 있어
+        # 문자열로 변환한 뒤 "data:" 접두사를 검사합니다.
+        if isinstance(raw_line, bytes):
+            line = raw_line.decode("utf-8", errors="replace").strip()
+        else:
+            line = str(raw_line).strip()
+
         if not line.startswith("data:"):
             continue
 
