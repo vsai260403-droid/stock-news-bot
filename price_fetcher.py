@@ -30,6 +30,20 @@ def _derive_market_state(meta: Dict[str, Any], now_ts: Optional[int] = None) -> 
     return "CLOSED"
 
 
+def _trading_session_id(meta: Dict[str, Any], fallback_ts: Optional[int] = None) -> str:
+    """Yahoo currentTradingPeriod의 정규장 시작일로 거래 세션 ID를 만듭니다."""
+    periods = meta.get("currentTradingPeriod") or {}
+    regular = periods.get("regular") or {}
+    regular_start = regular.get("start")
+    base_ts = regular_start if isinstance(regular_start, (int, float)) else fallback_ts
+    try:
+        if isinstance(base_ts, (int, float)):
+            return time.strftime("%Y%m%d", time.gmtime(int(base_ts)))
+    except Exception:
+        pass
+    return time.strftime("%Y%m%d", time.gmtime())
+
+
 def _to_float(value: Any) -> Optional[float]:
     try:
         if value is None:
@@ -187,6 +201,7 @@ def fetch_price(ticker: str) -> Optional[Dict[str, Any]]:
             "change_pct": change_pct,
             "currency": meta.get("currency", "USD"),
             "timestamp": timestamp,
+            "trading_session_id": _trading_session_id(meta, timestamp),
             "market_state": market_state,
             "raw_market_state": raw_market_state,
             "price_source": price_source,

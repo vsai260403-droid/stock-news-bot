@@ -24,7 +24,8 @@ from sec_fetcher import fetch_sec_filings, filter_sec_by_age, fetch_filing_text
 from twitter_fetcher import fetch_all_tweets
 
 # ─── 로깅 설정 ────────────────────────────────────────────────────────────────
-_LOG_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "logs")
+_APP_DIR = os.path.dirname(os.path.abspath(__file__))
+_LOG_DIR = os.path.join(_APP_DIR, "logs")
 os.makedirs(_LOG_DIR, exist_ok=True)
 _LOG_FILE = os.path.join(_LOG_DIR, "main.log")
 
@@ -41,12 +42,12 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 # ─── 파일 경로 ────────────────────────────────────────────────────────────────
-CONFIG_FILE = "config.json"
-SEEN_NEWS_FILE = "seen_news.json"
-SEEN_SEC_FILE = "seen_sec.json"
-SEEN_SEC_TICKERS_FILE = "seen_sec_tickers.json"  # 초기화된 SEC 티커 추적
-SEEN_TWEETS_FILE = "seen_tweets.json"
-SEEN_PRICE_LEVELS_FILE = "seen_price_levels.json"
+CONFIG_FILE = os.path.join(_APP_DIR, "config.json")
+SEEN_NEWS_FILE = os.path.join(_APP_DIR, "seen_news.json")
+SEEN_SEC_FILE = os.path.join(_APP_DIR, "seen_sec.json")
+SEEN_SEC_TICKERS_FILE = os.path.join(_APP_DIR, "seen_sec_tickers.json")  # 초기화된 SEC 티커 추적
+SEEN_TWEETS_FILE = os.path.join(_APP_DIR, "seen_tweets.json")
+SEEN_PRICE_LEVELS_FILE = os.path.join(_APP_DIR, "seen_price_levels.json")
 DEFAULT_GEMINI_MODEL = "gemini-3.1-flash-lite"
 
 
@@ -289,9 +290,9 @@ def check_prices(config: dict) -> int:
         direction = "up" if change_pct >= 0 else "down"
         current_level = int(abs(change_pct) / threshold) if threshold > 0 else 0
 
-        if market_state not in ("REGULAR", "PRE", "POST", "CLOSED"):
+        if market_state not in ("REGULAR", "PRE", "POST"):
             logger.info(
-                "[%s] 주가 체크 스킵: market=%s (지원하는 장 상태 아님)",
+                "[%s] 주가 체크 스킵: market=%s (프리장/정규장/애프터장 아님)",
                 ticker, market_state,
             )
             continue
