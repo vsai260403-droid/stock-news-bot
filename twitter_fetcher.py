@@ -28,6 +28,8 @@ _RSSHUB_INSTANCES: List[str] = [
     "https://rsshub.privacyredirect.com",
 ]
 
+_TRUMP_TRUTH_FEED = "https://trumpstruth.org/feed"
+
 _NITTER_INSTANCES: List[str] = [
     "https://nitter.net",
     "https://xcancel.com",
@@ -206,6 +208,52 @@ def _parse_feed_entries(feed: Any, username: str) -> List[Dict[str, Any]]:
     return result
 
 
+def _fetch_trump_truth_feed(timeout: int = 10) -> List[Dict[str, Any]]:
+    """realDonaldTrump 계정용 Truth Social 공개 RSS fallback."""
+    try:
+        import feedparser
+        import requests as _req
+    except ImportError:
+        logger.warning("feedparser 또는 requests 미설치")
+        return []
+
+    try:
+        r = _req.get(_TRUMP_TRUTH_FEED, timeout=timeout, headers=_BROWSER_HEADERS)
+        if r.status_code != 200:
+            logger.info("Trump Truth RSS HTTP %d", r.status_code)
+            return []
+        feed = feedparser.parse(r.text)
+        if feed.bozo and not feed.entries:
+            logger.info("Trump Truth RSS 파싱 실패 (bozo=%s)", feed.bozo_exception)
+            return []
+
+        result: List[Dict[str, Any]] = []
+        for entry in feed.entries[:10]:
+            raw_id = entry.get("truth_originalid") or entry.get("id") or entry.get("link", "")
+            if not raw_id:
+                continue
+            published = entry.get("published_parsed")
+            ts = int(calendar.timegm(published)) if published else 0
+            title = _strip_html(entry.get("title", ""))
+            summary = _strip_html(entry.get("summary", ""))
+            text = summary if summary else title
+            result.append({
+                "id": f"tweet_realDonaldTrump_truth_{raw_id}",
+                "username": "realDonaldTrump",
+                "title": title[:300],
+                "text": text[:500],
+                "link": entry.get("truth_originalurl") or entry.get("link", ""),
+                "publish_time": ts,
+                "source": "Truth Social",
+            })
+        if not result:
+            logger.info("Trump Truth RSS 트윗 0개")
+        return result
+    except Exception as e:
+        logger.info("Trump Truth RSS 실패: %s", e)
+        return []
+
+
 def _try_fetch_rss_nitter(instance: str, username: str, timeout: int = 8) -> List[Dict[str, Any]]:
     """Nitter 인스턴스에서 RSS를 가져옵니다."""
     try:
@@ -315,6 +363,15 @@ def fetch_twitter_timeline(
     instances = nitter_instances or get_healthy_instances()
     stale_limit = stale_max_age_hours if stale_max_age_hours is not None else _configured_stale_hours(username, config)
     stale_candidates: List[str] = []
+    username_norm = username.lstrip("@").lower()
+
+    if username_norm == "realdonaldtrump":
+        result = _fetch_trump_truth_feed()
+        if result and not _is_stale_result("realDonaldTrump", _TRUMP_TRUTH_FEED, result, stale_limit):
+            newest_age = _newest_age_hours(result)
+            age_text = f", newest_age={newest_age:.1f}h" if newest_age is not None else ""
+            logger.info("[@realDonaldTrump] %d개 Truth Social 수집 성공 (%s%s)", len(result), _TRUMP_TRUTH_FEED, age_text)
+            return result
 
     for instance in instances:
         if _is_rsshub_instance(instance):
