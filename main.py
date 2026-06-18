@@ -32,6 +32,7 @@ from app_state import (
 from discord_bot import start_bot_thread
 from discord_notifier import send_linkedin_alert, send_news_alert, send_official_alert, send_sec_alert, send_tweet_alert, send_price_alert
 from linkedin_fetcher import fetch_all_linkedin_posts
+from market_signal_analyzer import analyze_price_move
 from news_fetcher import fetch_all_news, ai_summarize_news, news_title_hash
 from official_fetcher import fetch_all_official_posts
 from price_fetcher import fetch_price
@@ -190,12 +191,18 @@ def check_prices(config: dict) -> int:
             )
             continue
 
+        signal_analysis = None
+        if config.get("price_signal_analysis_enabled", True):
+            signal_analysis = analyze_price_move(info, config)
+
         for lvl in range(max_alerted + 1, current_level + 1):
             target_pct = lvl * threshold * (1 if direction == "up" else -1)
             alert_info = dict(info)
             alert_info["alert_level"] = lvl
             alert_info["target_pct"] = target_pct
             alert_info["threshold"] = threshold
+            if signal_analysis:
+                alert_info["signal_analysis"] = signal_analysis
             if send_price_alert(webhook_url, alert_info):
                 _price_levels[level_key] = lvl
                 levels_changed = True

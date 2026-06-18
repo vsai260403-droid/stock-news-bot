@@ -25,6 +25,9 @@
   "official_check_interval_seconds": 900,
   "official_max_age_hours": 72,
   "official_feeds": [],
+  "price_signal_analysis_enabled": true,
+  "price_catalyst_lookback_hours": 24,
+  "price_catalyst_max_items": 8,
   "twitter_accounts": {
     "TSLA": ["Tesla", "elonmusk"],
     "AAPL": ["Apple", "tim_cook"],

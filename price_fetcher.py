@@ -14,6 +14,19 @@ logger = logging.getLogger(__name__)
 _HEADERS = {"User-Agent": "Mozilla/5.0 (compatible; StockAlarmBot/1.0)"}
 
 
+def _fetch_quote_stats(ticker: str) -> Dict[str, Any]:
+    url = f"https://query1.finance.yahoo.com/v7/finance/quote?symbols={ticker}"
+    try:
+        resp = requests.get(url, timeout=8, headers=_HEADERS)
+        if resp.status_code != 200:
+            return {}
+        results = resp.json().get("quoteResponse", {}).get("result", [])
+        return results[0] if results else {}
+    except Exception as e:
+        logger.info("[%s] Yahoo quote stats 조회 실패: %s", ticker, e)
+        return {}
+
+
 def _derive_market_state(meta: Dict[str, Any], now_ts: Optional[int] = None) -> str:
     """Yahoo chart meta.currentTradingPeriod로 장 상태를 직접 계산합니다."""
     now_ts = int(now_ts or time.time())
@@ -69,6 +82,44 @@ def _latest_chart_price(result: Dict[str, Any]) -> Tuple[Optional[float], Option
         return price, int(ts) if isinstance(ts, (int, float)) else None
 
     return None, None
+
+
+def _select_volume_metrics(
+    market_state: str,
+    meta: Dict[str, Any],
+    quote: Dict[str, Any],
+) -> Tuple[Optional[float], Optional[float], Optional[float], str]:
+    regular_volume = _to_float(quote.get("regularMarketVolume")) or _to_float(meta.get("regularMarketVolume"))
+    pre_volume = _to_float(quote.get("preMarketVolume")) or _to_float(meta.get("preMarketVolume"))
+    post_volume = _to_float(quote.get("postMarketVolume")) or _to_float(meta.get("postMarketVolume"))
+    avg_volume = (
+        _to_float(quote.get("averageDailyVolume10Day"))
+        or _to_float(quote.get("averageDailyVolume3Month"))
+        or _to_float(meta.get("averageDailyVolume10Day"))
+        or _to_float(meta.get("averageDailyVolume3Month"))
+    )
+
+    if market_state == "PRE" and pre_volume is not None:
+        volume = pre_volume
+        source = "preMarketVolume"
+    elif market_state == "POST" and post_volume is not None:
+        volume = post_volume
+        source = "postMarketVolume"
+    elif regular_volume is not None:
+        volume = regular_volume
+        source = "regularMarketVolume"
+    elif pre_volume is not None:
+        volume = pre_volume
+        source = "preMarketVolume"
+    elif post_volume is not None:
+        volume = post_volume
+        source = "postMarketVolume"
+    else:
+        volume = None
+        source = ""
+
+    volume_ratio = volume / avg_volume if volume and avg_volume else None
+    return volume, avg_volume, volume_ratio, source
 
 
 def _select_price_and_base(
@@ -158,9 +209,11 @@ def fetch_price(ticker: str) -> Optional[Dict[str, Any]]:
 
         result = results[0]
         meta = result.get("meta", {})
+        quote = _fetch_quote_stats(ticker)
         raw_market_state = meta.get("marketState")
         market_state = raw_market_state or _derive_market_state(meta)
         latest_price, latest_ts = _latest_chart_price(result)
+        volume, avg_volume, volume_ratio, volume_source = _select_volume_metrics(market_state, meta, quote)
 
         price, prev_close, price_source, prev_source = _select_price_and_base(
             ticker.upper(), market_state, meta, latest_price
@@ -210,6 +263,10 @@ def fetch_price(ticker: str) -> Optional[Dict[str, Any]]:
             "pre_market_price": _to_float(meta.get("preMarketPrice")),
             "post_market_price": _to_float(meta.get("postMarketPrice")),
             "chart_previous_close": _to_float(meta.get("chartPreviousClose")),
+            "volume": volume,
+            "average_volume": avg_volume,
+            "volume_ratio": volume_ratio,
+            "volume_source": volume_source,
         }
     except Exception as e:
         logger.error("[%s] 주가 조회 실패: %s", ticker, e)

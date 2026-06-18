@@ -340,6 +340,7 @@ def send_price_alert(webhook_url: str, item: Dict[str, Any]) -> bool:
     currency = item.get("currency", "USD")
     target_pct = item.get("target_pct")
     threshold = item.get("threshold")
+    signal = item.get("signal_analysis") or {}
 
     is_up = change >= 0
     arrow = "📈" if is_up else "📉"
@@ -359,6 +360,68 @@ def send_price_alert(webhook_url: str, item: Dict[str, Any]) -> bool:
         title = f"{arrow}  [{ticker}]  주가 급변동 알람  —  {comment}"
 
     threshold_note = f"\n⚠️ 알람 설정: ±{threshold:.0f}% 단위" if threshold else ""
+    volume = item.get("volume")
+    avg_volume = item.get("average_volume")
+    volume_ratio = item.get("volume_ratio")
+    volume_note = signal.get("volume_note") or ""
+    if isinstance(volume_ratio, (int, float)) and not volume_note:
+        volume_note = f"평균 대비 {volume_ratio:.1f}배"
+
+    fields = []
+    if signal:
+        fields.append({
+            "name": "매매 참고 신호",
+            "value": (
+                f"영향도: **{signal.get('impact_score', '?')}/5**\n"
+                f"방향성: **{signal.get('direction', '중립/불명')}**\n"
+                f"신뢰도: **{signal.get('confidence', '낮음')}**"
+            ),
+            "inline": True,
+        })
+        fields.append({
+            "name": "급등락 원인 후보",
+            "value": str(signal.get("cause_summary") or "최근 촉매 후보 없음")[:1024],
+            "inline": False,
+        })
+        if signal.get("risk_note"):
+            fields.append({
+                "name": "확인할 리스크",
+                "value": str(signal.get("risk_note"))[:1024],
+                "inline": False,
+            })
+
+    if volume or avg_volume or volume_note:
+        vol_lines = []
+        if volume:
+            vol_lines.append(f"현재 거래량: **{volume:,.0f}**")
+        if avg_volume:
+            vol_lines.append(f"평균 거래량: {avg_volume:,.0f}")
+        if volume_note:
+            marker = " 🚨" if signal.get("abnormal_volume") else ""
+            vol_lines.append(f"수급: {volume_note}{marker}")
+        fields.append({
+            "name": "거래량/이상거래",
+            "value": "\n".join(vol_lines)[:1024],
+            "inline": True,
+        })
+
+    catalysts = signal.get("catalysts") or []
+    if catalysts:
+        lines = []
+        for catalyst in catalysts[:3]:
+            label = catalyst.get("label", "이벤트")
+            title_text = str(catalyst.get("title") or "")
+            title_text = title_text if len(title_text) <= 110 else title_text[:109] + "…"
+            link = catalyst.get("link")
+            if link:
+                lines.append(f"• **{label}**: [{title_text}]({link})")
+            else:
+                lines.append(f"• **{label}**: {title_text}")
+        fields.append({
+            "name": "최근 촉매 후보",
+            "value": "\n".join(lines)[:1024],
+            "inline": False,
+        })
 
     embed: Dict[str, Any] = {
         "title": title,
@@ -373,5 +436,7 @@ def send_price_alert(webhook_url: str, item: Dict[str, Any]) -> bool:
         "footer": {"text": f"Yahoo Finance  •  {ticker}"},
         "timestamp": _fmt_iso_utc(item.get("timestamp", 0)),
     }
+    if fields:
+        embed["fields"] = fields
     payload = {"username": "주식 뉴스 봇 📈", "embeds": [embed]}
     return _post(webhook_url, payload)
