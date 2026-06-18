@@ -213,6 +213,52 @@ def send_linkedin_alert(webhook_url: str, item: Dict[str, Any]) -> bool:
     return _post(webhook_url, payload)
 
 
+def send_official_alert(webhook_url: str, item: Dict[str, Any]) -> bool:
+    """회사 공식 IR/Newsroom 업데이트 알람을 Discord로 전송합니다."""
+    ticker = item.get("ticker", "")
+    name = item.get("name", "Official")
+    title = item.get("title", "공식 업데이트")[:250]
+    summary = str(item.get("summary") or "").strip()
+    link: Optional[str] = item.get("link") or None
+    publish_time = item.get("publish_time", 0)
+    ai_summary: Optional[str] = item.get("ai_summary") or None
+
+    desc_lines = []
+    if ai_summary:
+        desc_lines.append(f"🤖 **AI 요약 (한국어)**\n{ai_summary}")
+    elif summary:
+        desc_lines.append(f"**내용:** {summary[:900]}")
+    desc_lines.append(f"**출처:** {name}")
+    desc_lines.append(f"**시간:** {_fmt_local(publish_time)}")
+
+    fields = []
+    if link:
+        fields.append({
+            "name": "🔗 원문 링크",
+            "value": f"[공식 페이지에서 보기]({link})",
+            "inline": False,
+        })
+
+    title_prefix = f"🏢  [{ticker}]" if ticker else "🏢"
+    embed: Dict[str, Any] = {
+        "title": f"{title_prefix}  {title}",
+        "color": 5763719,
+        "description": "\n".join(desc_lines),
+        "footer": {"text": f"Official IR/Newsroom  •  {name}"},
+        "timestamp": _fmt_iso_utc(publish_time),
+    }
+    if link:
+        embed["url"] = link
+    if fields:
+        embed["fields"] = fields
+
+    payload = {
+        "username": "주식 뉴스 봇 📈",
+        "embeds": [embed],
+    }
+    return _post(webhook_url, payload)
+
+
 def send_sec_alert(webhook_url: str, item: Dict[str, Any]) -> bool:
     """SEC EDGAR 공시 알람을 Discord로 전송합니다."""
     ticker = item.get("ticker", "")

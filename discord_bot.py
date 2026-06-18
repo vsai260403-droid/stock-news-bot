@@ -25,6 +25,11 @@ discord_bot.py - Discord Bot을 통한 티커 관리 명령어
   !twitter-follows                    — 단독 팔로우 계정 목록
   !twitter-unfollow-all               — 단독 팔로우 계정 전체 제거
 
+    !official-add TSLA Tesla URL        — 공식 IR/Newsroom 페이지 추가
+    !official-list                      — 공식 페이지 목록
+    !official-remove 1                  — 공식 페이지 제거
+    !official-on / !official-off        — 공식 페이지 알람 ON/OFF
+
   !set-gemini-key AIza...  — Gemini API 키 (트위터 자동 탐색)
   !set-openai-key sk-...   — OpenAI API 키 (AI 요약)
   !set-interval 300        — 뉴스 체크 주기 (초)
@@ -621,6 +626,92 @@ def _make_bot(prefix: str):
         name = removed.get("name") if isinstance(removed, dict) else str(removed)
         await ctx.send(f"🗑️ LinkedIn RSS 피드 제거: **{name}**")
 
+    # ── 공식 IR/Newsroom 관리 ───────────────────────────────────────────────
+    @bot.command(name="official-on")
+    async def cmd_official_on(ctx):
+        cfg = _load_config()
+        cfg["monitor_official"] = True
+        _save_config(cfg)
+        await ctx.send(f"🏢 공식 IR/Newsroom 알람 **ON** (소스 {len(cfg.get('official_feeds', []))}개)")
+
+    @bot.command(name="official-off")
+    async def cmd_official_off(ctx):
+        cfg = _load_config()
+        cfg["monitor_official"] = False
+        _save_config(cfg)
+        await ctx.send("🔕 공식 IR/Newsroom 알람 **OFF**")
+
+    @bot.command(name="official-list")
+    async def cmd_official_list(ctx):
+        cfg = _load_config()
+        feeds = cfg.get("official_feeds", [])
+        status = "🟢 ON" if cfg.get("monitor_official", False) else "🔴 OFF"
+        if not feeds:
+            await ctx.send(
+                f"🏢 공식 IR/Newsroom 알람: {status}\n"
+                "등록된 소스 없음. `!official-add TSLA Tesla https://ir.tesla.com/press` 로 추가하세요."
+            )
+            return
+        lines = [f"🏢 공식 IR/Newsroom 알람: {status} (소스 {len(feeds)}개)"]
+        for idx, feed in enumerate(feeds, 1):
+            if isinstance(feed, dict):
+                ticker = feed.get("ticker", "")
+                name = feed.get("name") or ticker or f"Official {idx}"
+                url = feed.get("url", "")
+            else:
+                ticker = ""
+                name = f"Official {idx}"
+                url = str(feed)
+            label = f"[{ticker}] {name}" if ticker else name
+            lines.append(f"{idx}. **{label}** — {url}")
+        await ctx.send("\n".join(lines))
+
+    @bot.command(name="official-add")
+    async def cmd_official_add(ctx, ticker: str = "", name: str = "", url: str = ""):
+        if not ticker or not name or not url:
+            await ctx.send("사용법: `!official-add TSLA Tesla https://ir.tesla.com/press`")
+            return
+        if not url.startswith(("http://", "https://")):
+            await ctx.send("❌ URL은 http:// 또는 https:// 로 시작해야 합니다.")
+            return
+        cfg = _load_config()
+        feeds: list = cfg.setdefault("official_feeds", [])
+        for feed in feeds:
+            existing_url = feed.get("url") if isinstance(feed, dict) else str(feed)
+            if existing_url == url:
+                await ctx.send("⚠️ 이미 등록된 공식 페이지 URL입니다.")
+                return
+        feeds.append({"ticker": ticker.upper().strip(), "name": name.strip(), "url": url.strip()})
+        cfg["monitor_official"] = True
+        _save_config(cfg)
+        await ctx.send(f"✅ 공식 IR/Newsroom 소스 추가: **[{ticker.upper()}] {name}**\n알람: **ON**")
+
+    @bot.command(name="official-remove")
+    async def cmd_official_remove(ctx, index_or_ticker: str = ""):
+        if not index_or_ticker:
+            await ctx.send("사용법: `!official-remove 1` 또는 `!official-remove TSLA`")
+            return
+        cfg = _load_config()
+        feeds: list = cfg.get("official_feeds", [])
+        removed = None
+        try:
+            idx = int(index_or_ticker) - 1
+            if 0 <= idx < len(feeds):
+                removed = feeds.pop(idx)
+        except ValueError:
+            target = index_or_ticker.upper().strip()
+            for idx, feed in enumerate(feeds):
+                ticker = (feed.get("ticker") if isinstance(feed, dict) else "") or ""
+                if ticker.upper() == target:
+                    removed = feeds.pop(idx)
+                    break
+        if not removed:
+            await ctx.send("⚠️ 해당 공식 페이지 소스를 찾지 못했습니다. `!official-list` 로 확인하세요.")
+            return
+        _save_config(cfg)
+        name = removed.get("name") if isinstance(removed, dict) else str(removed)
+        await ctx.send(f"🗑️ 공식 IR/Newsroom 소스 제거: **{name}**")
+
     # ── !price ────────────────────────────────────────────────────────────────
     @bot.command(name="price")
     async def cmd_price(ctx, ticker: str = ""):
@@ -954,6 +1045,7 @@ def _make_bot(prefix: str):
         monitor_sec = cfg.get("monitor_sec_filings", False)
         monitor_twitter = cfg.get("monitor_twitter", False)
         monitor_linkedin = cfg.get("monitor_linkedin", False)
+        monitor_official = cfg.get("monitor_official", False)
         news_filter = cfg.get("news_importance_filter_enabled", True)
         news_filter_score = cfg.get("news_importance_min_score", 2)
         sources = cfg.get("news_sources", ["yahoo", "google_rss"])
@@ -968,6 +1060,7 @@ def _make_bot(prefix: str):
         sec_str = f"ON ({sec_interval}초)" if monitor_sec else "OFF"
         twitter_str = "🟢 ON" if monitor_twitter else "🔴 OFF"
         linkedin_str = f"🟢 ON ({len(cfg.get('linkedin_feeds', []))}개)" if monitor_linkedin else "🔴 OFF"
+        official_str = f"🟢 ON ({len(cfg.get('official_feeds', []))}개)" if monitor_official else "🔴 OFF"
         news_filter_str = f"🟢 ON (강도 {news_filter_score})" if news_filter else "🔴 OFF"
 
         ticker_lines = []
@@ -988,7 +1081,8 @@ def _make_bot(prefix: str):
             f"• 트위터 자동 탐색 (Gemini): {gemini_str}\n"
             f"• SEC 공시 감시: {sec_str}\n"
             f"• 트위터 알람: {twitter_str}\n"
-            f"• LinkedIn 알람: {linkedin_str}"
+            f"• LinkedIn 알람: {linkedin_str}\n"
+            f"• 공식 IR/Newsroom 알람: {official_str}"
         )
         await ctx.send(msg)
 
@@ -1031,6 +1125,12 @@ def _make_bot(prefix: str):
             "`!linkedin-remove 1` — LinkedIn 피드 제거\n"
             "`!linkedin-on` — LinkedIn 알람 활성화\n"
             "`!linkedin-off` — LinkedIn 알람 비활성화\n"
+            "\n"
+            "**[ 공식 IR/Newsroom ]**\n"
+            "`!official-add TSLA Tesla URL` — 공식 IR/뉴스룸 페이지 추가\n"
+            "`!official-list` — 공식 페이지 목록\n"
+            "`!official-remove 1` — 공식 페이지 제거\n"
+            "`!official-on` / `!official-off` — 공식 페이지 알람 ON/OFF\n"
             "\n"
             "**[ SEC 공시 ]**\n"
             "`!sec-test AAPL` — SEC 공시 수집 테스트 (최근 공시 3건 실제 알람 전송)\n"

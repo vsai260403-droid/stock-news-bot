@@ -6,6 +6,7 @@ seen_news.json
 seen_sec.json
 seen_tweets.json
 seen_linkedin.json
+seen_official.json
 ticker_cik_cache.json
 
 # Python

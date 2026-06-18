@@ -15,6 +15,13 @@ ticker_manager.py - 티커 및 설정 관리 CLI
   python ticker_manager.py twitter-remove TSLA elonmusk
   python ticker_manager.py twitter-on
   python ticker_manager.py twitter-off
+
+    [공식 IR/Newsroom 관련]
+    python ticker_manager.py official-list
+    python ticker_manager.py official-add TSLA Tesla https://ir.tesla.com/press
+    python ticker_manager.py official-remove TSLA
+    python ticker_manager.py official-on
+    python ticker_manager.py official-off
 """
 import logging
 import sys
@@ -68,6 +75,10 @@ def cmd_list(config: dict) -> None:
     print(f"│  Twitter 모니터 : {'ON' if tw else 'OFF'}")
     if tw:
         print(f"│  Twitter 체크주기: {config.get('twitter_check_interval_seconds', 600)}초")
+    official = config.get("monitor_official", False)
+    print(f"│  공식 IR/Newsroom: {'ON  (' + str(len(config.get('official_feeds', []))) + '개)' if official else 'OFF'}")
+    if official:
+        print(f"│  공식 체크 주기   : {config.get('official_check_interval_seconds', 900)}초")
     print(f"│  등록 티커 ({len(tickers)}개) :")
     if tickers:
         twitter_accounts = config.get("twitter_accounts", {})
@@ -389,6 +400,83 @@ def cmd_linkedin_off(config: dict) -> None:
     print("LinkedIn 모니터링: OFF")
 
 
+# ─── 공식 IR/Newsroom 관리 명령어 ───────────────────────────────────────────
+def cmd_official_list(config: dict) -> None:
+    feeds = config.get("official_feeds", [])
+    status = "ON" if config.get("monitor_official", False) else "OFF  (활성화: official-on)"
+    print(f"\n공식 IR/Newsroom 모니터링: {status}")
+    print("─" * 45)
+    if not feeds:
+        print("  등록된 공식 페이지가 없습니다.")
+        print("  예) python ticker_manager.py official-add TSLA Tesla https://ir.tesla.com/press")
+    else:
+        for idx, feed in enumerate(feeds, 1):
+            if isinstance(feed, dict):
+                ticker = feed.get("ticker", "")
+                name = feed.get("name") or ticker or f"Official {idx}"
+                url = feed.get("url", "")
+            else:
+                ticker = ""
+                name = f"Official {idx}"
+                url = str(feed)
+            label = f"[{ticker}] {name}" if ticker else name
+            print(f"  {idx}. {label}: {url}")
+    print()
+
+
+def cmd_official_add(config: dict, ticker: str, name: str, url: str) -> None:
+    if not ticker or not name or not url:
+        print("사용법: python ticker_manager.py official-add TICKER NAME URL")
+        sys.exit(1)
+    if not url.startswith(("http://", "https://")):
+        print("⚠️  URL은 http:// 또는 https:// 로 시작해야 합니다.")
+        sys.exit(1)
+    feeds: list = config.setdefault("official_feeds", [])
+    for feed in feeds:
+        existing_url = feed.get("url") if isinstance(feed, dict) else str(feed)
+        if existing_url == url:
+            print("⚠️  이미 등록된 공식 페이지 URL입니다.")
+            return
+    feeds.append({"ticker": ticker.upper().strip(), "name": name.strip(), "url": url.strip()})
+    config["monitor_official"] = True
+    save_config(config)
+    print(f"공식 IR/Newsroom 소스 추가: [{ticker.upper()}] {name}")
+
+
+def cmd_official_remove(config: dict, index_or_ticker: str) -> None:
+    feeds: list = config.get("official_feeds", [])
+    removed = None
+    try:
+        idx = int(index_or_ticker) - 1
+        if 0 <= idx < len(feeds):
+            removed = feeds.pop(idx)
+    except ValueError:
+        target = index_or_ticker.upper().strip()
+        for idx, feed in enumerate(feeds):
+            ticker = (feed.get("ticker") if isinstance(feed, dict) else "") or ""
+            if ticker.upper() == target:
+                removed = feeds.pop(idx)
+                break
+    if not removed:
+        print("⚠️  해당 공식 페이지 소스를 찾지 못했습니다.")
+        return
+    save_config(config)
+    name = removed.get("name") if isinstance(removed, dict) else str(removed)
+    print(f"공식 IR/Newsroom 소스 제거: {name}")
+
+
+def cmd_official_on(config: dict) -> None:
+    config["monitor_official"] = True
+    save_config(config)
+    print("공식 IR/Newsroom 모니터링: ON")
+
+
+def cmd_official_off(config: dict) -> None:
+    config["monitor_official"] = False
+    save_config(config)
+    print("공식 IR/Newsroom 모니터링: OFF")
+
+
 # ─── 메인 ─────────────────────────────────────────────────────────────────────
 def print_usage() -> None:
     print(__doc__)
@@ -486,6 +574,27 @@ def main() -> None:
 
     elif command == "linkedin-off":
         cmd_linkedin_off(config)
+
+    elif command == "official-list":
+        cmd_official_list(config)
+
+    elif command == "official-add":
+        if len(args) < 4:
+            print("사용법: python ticker_manager.py official-add TICKER NAME URL")
+            sys.exit(1)
+        cmd_official_add(config, args[1], args[2], args[3])
+
+    elif command == "official-remove":
+        if len(args) < 2:
+            print("사용법: python ticker_manager.py official-remove 1")
+            sys.exit(1)
+        cmd_official_remove(config, args[1])
+
+    elif command == "official-on":
+        cmd_official_on(config)
+
+    elif command == "official-off":
+        cmd_official_off(config)
 
     else:
         print(f"알 수 없는 명령어: {command}")

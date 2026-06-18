@@ -20,6 +20,10 @@
   "linkedin_check_interval_seconds": 900,
   "linkedin_max_age_hours": 24,
   "linkedin_feeds": [],
+  "monitor_official": false,
+  "official_check_interval_seconds": 900,
+  "official_max_age_hours": 72,
+  "official_feeds": [],
   "twitter_accounts": {
     "TSLA": ["Tesla", "elonmusk"],
     "AAPL": ["Apple", "tim_cook"],
