@@ -30,24 +30,18 @@ discord_bot.py - Discord Bot을 통한 티커 관리 명령어
   !set-interval 300        — 뉴스 체크 주기 (초)
   !set-webhook URL         — Discord Webhook URL
 """
-import json
 import logging
-import os
-import hashlib
 import time
 import threading
 from typing import Optional
 
 import requests
 
+from app_state import SEEN_NEWS_FILE, load_config, load_seen_map, save_config, save_json
 from twitter_fetcher import KNOWN_ACCOUNTS
-from ticker_manager import _gemini_find_twitter_accounts
+from twitter_account_finder import _gemini_find_twitter_accounts
 
 logger = logging.getLogger(__name__)
-
-CONFIG_FILE = "config.json"
-SEEN_NEWS_FILE = "seen_news.json"
-
 
 def _seed_seen_news_for_tickers(tickers: list, config: dict) -> None:
     """새로 추가된 티커의 현재 뉴스를 seen에 등록합니다 (알람 없이).
@@ -55,25 +49,9 @@ def _seed_seen_news_for_tickers(tickers: list, config: dict) -> None:
     !add 직후 호출하여 기존 오래된 기사가 새 기사로 전송되는 것을 방지합니다.
     """
     try:
-        from news_fetcher import fetch_all_news
-        import hashlib as _hashlib
+        from news_fetcher import fetch_all_news, news_title_hash
 
-        def _title_hash(title: str) -> str:
-            return "title_" + _hashlib.md5(title.lower().strip().encode("utf-8")).hexdigest()[:16]
-
-        # 기존 seen 로드
-        seen: dict = {}
-        if os.path.exists(SEEN_NEWS_FILE):
-            try:
-                with open(SEEN_NEWS_FILE, "r", encoding="utf-8") as f:
-                    data = json.load(f)
-                if isinstance(data, dict):
-                    seen = data
-                elif isinstance(data, list):
-                    seen = {k: int(time.time()) for k in data}
-            except Exception:
-                pass
-
+        seen = load_seen_map(SEEN_NEWS_FILE)
         now = int(time.time())
         count = 0
         for ticker in tickers:
@@ -83,13 +61,11 @@ def _seed_seen_news_for_tickers(tickers: list, config: dict) -> None:
                 if item_id and item_id not in seen:
                     seen[item_id] = now
                     count += 1
-                th = _title_hash(item.get("title", ""))
+                th = news_title_hash(item.get("title", ""))
                 if th and th not in seen:
                     seen[th] = now
 
-        # 저장
-        with open(SEEN_NEWS_FILE, "w", encoding="utf-8") as f:
-            json.dump(seen, f, indent=2)
+        save_json(SEEN_NEWS_FILE, seen)
 
         if count > 0:
             logger.info("새 티커 %s: 기존 뉴스 %d건 seen 등록 (알람 없이)", tickers, count)
@@ -115,13 +91,11 @@ def _validate_ticker(ticker: str) -> bool:
 
 
 def _load_config() -> dict:
-    with open(CONFIG_FILE, "r", encoding="utf-8") as f:
-        return json.load(f)
+    return load_config()
 
 
 def _save_config(config: dict) -> None:
-    with open(CONFIG_FILE, "w", encoding="utf-8") as f:
-        json.dump(config, f, indent=2, ensure_ascii=False)
+    save_config(config)
 
 
 def _make_bot(prefix: str):

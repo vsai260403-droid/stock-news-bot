@@ -7,6 +7,7 @@ news_fetcher.py - 여러 소스에서 뉴스 수집
   finnhub    - Finnhub Company News (무료 API 키: https://finnhub.io/register)
 """
 import calendar
+import hashlib
 import html
 import json
 import logging
@@ -56,6 +57,65 @@ def _entry_summary(entry: Any, title: str = "") -> str:
             continue
         return cleaned[:1200]
     return ""
+
+
+def normalize_news_title(title: str) -> str:
+    """재배포 기사 중복 제거용 제목 정규화."""
+    normalized = (title or "").lower().strip()
+    normalized = normalized.replace("’", "'").replace("‘", "'")
+    normalized = normalized.replace("“", '"').replace("”", '"')
+    normalized = normalized.replace("–", "-").replace("—", "-")
+
+    normalized = re.sub(r"^\[[a-z]{1,8}\]\s*", "", normalized)
+    normalized = re.sub(
+        r"\s+[-|:]\s+[a-z0-9][a-z0-9&.,' /-]{0,45}\."
+        r"(com|net|org|io|ai|co|news|finance)\s*$",
+        "",
+        normalized,
+    )
+
+    suffixes = [
+        "yahoo finance", "the motley fool", "motley fool",
+        "24/7 wall st.", "24/7 wall st", "247 wall st.", "247 wall st", "wall st.", "wall st",
+        "barron's", "barrons", "benzinga", "reuters", "marketwatch",
+        "investor's business daily", "investors business daily", "seeking alpha", "zacks",
+        "globenewswire", "business wire", "pr newswire", "cnbc", "msn", "google news",
+        "ap news", "associated press", "morningstar", "investopedia", "kiplinger",
+        "nasdaq", "gurufocus", "thestreet", "the street",
+    ]
+    publisher_pattern = "|".join(re.escape(s) for s in suffixes)
+    normalized = re.sub(r"\s+[-|:]\s+(" + publisher_pattern + r")\s*$", "", normalized)
+    normalized = re.sub(r"\s+\((" + publisher_pattern + r")\)\s*$", "", normalized)
+
+    normalized = re.sub(
+        r"\s+[-|:]\s+[a-z0-9&.,' /-]{2,45}\s+"
+        r"(news|finance|wire|journal|times|post|daily|report|reports|media|market|markets|street|st\.?)\.?\s*$",
+        "",
+        normalized,
+    )
+
+    match = re.search(r"\s+[-|:]\s+([a-z0-9&.,' /-]{2,35})$", normalized)
+    if match:
+        suffix = match.group(1).strip()
+        suffix_words = suffix.split()
+        looks_like_publisher = (
+            len(suffix_words) <= 4
+            and not any(ch.isdigit() for ch in suffix)
+            and len(normalized[:match.start()].split()) >= 4
+        )
+        if looks_like_publisher:
+            normalized = normalized[:match.start()].strip()
+
+    normalized = normalized.replace("'s", "s")
+    normalized = re.sub(r"[^a-z0-9가-힣]+", " ", normalized)
+    normalized = re.sub(r"\s+", " ", normalized).strip()
+    return normalized
+
+
+def news_title_hash(title: str) -> str:
+    """같은 기사 재배포를 잡기 위한 안정적인 제목 해시 키를 반환합니다."""
+    normalized = normalize_news_title(title)
+    return "title_norm_" + hashlib.md5(normalized.encode("utf-8")).hexdigest()[:16]
 
 
 # ── 관련성 필터 ───────────────────────────────────────────────────────────────
@@ -385,17 +445,13 @@ def fetch_all_news(ticker: str, config: dict) -> List[Dict[str, Any]]:
     seen_title_hashes: set = set()
     all_items: List[Dict[str, Any]] = []
 
-    def _title_hash(title: str) -> str:
-        import hashlib
-        return hashlib.md5(title.lower().strip().encode("utf-8")).hexdigest()[:16]
-
     def _add(items: List[Dict[str, Any]], source_name: str) -> None:
         before = len(all_items)
         for item in items:
             if not item.get("id"):
                 logger.info("[%s] 뉴스 제외: item_id 없음 — %s", ticker, item.get("title", "")[:120])
                 continue
-            th = _title_hash(item.get("title", ""))
+            th = news_title_hash(item.get("title", ""))
             if item["id"] in seen_ids:
                 logger.info("[%s] 뉴스 제외: 수집 중복 id — %s", ticker, item.get("title", "")[:120])
                 continue

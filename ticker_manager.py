@@ -16,19 +16,15 @@ ticker_manager.py - 티커 및 설정 관리 CLI
   python ticker_manager.py twitter-on
   python ticker_manager.py twitter-off
 """
-import json
 import logging
-import os
 import sys
-from typing import List, Optional
+from typing import List
 
+from app_state import DEFAULT_GEMINI_MODEL, load_config as _load_app_config, save_config as _save_app_config
 from twitter_fetcher import KNOWN_ACCOUNTS
+from twitter_account_finder import _gemini_find_twitter_accounts
 
 logger = logging.getLogger(__name__)
-
-CONFIG_FILE = "config.json"
-DEFAULT_GEMINI_MODEL = "gemini-3.1-flash-lite"
-
 
 def _gemini_model(config: dict, specific_key: str = "") -> str:
     """config.json에서 Gemini 모델명을 읽습니다."""
@@ -42,86 +38,12 @@ def _gemini_model(config: dict, specific_key: str = "") -> str:
     )
 
 
-def _gemini_find_twitter_accounts(ticker: str, gemini_api_key: str, gemini_model: str = DEFAULT_GEMINI_MODEL) -> Optional[List[str]]:
-    """Gemini에게 티커의 공식 트위터 계정을 물어봅니다.
-
-    반환: 계정명 리스트 (예: ['nvidia', 'JensenHuang']) 또는 None(실패 시)
-    OpenAI 호환 API 사용 (grpcio 의존성 없음, 라즈베리파이 호환).
-    """
-    try:
-        from openai import OpenAI
-    except ImportError:
-        logger.warning("Gemini 트위터 탐색 실패: openai 라이브러리 미설치")
-        return None
-    try:
-        client = OpenAI(
-            api_key=gemini_api_key,
-            base_url="https://generativelanguage.googleapis.com/v1beta/openai/",
-            max_retries=0,
-        )
-        prompt = (
-            f"주식 티커 '{ticker}'의 공식 트위터(X) 계정 사용자명(username)을 알려주세요.\n"
-            f"주식 티커 '{ticker}'의 미국 상장회사 공식 X 계정을 찾아라. "
-            "암호화폐/코인/블록체인 프로젝트 계정은 제외하라. "
-            "가능하면 회사명, 거래소, 산업을 기준으로 판단하라.\n"
-            "회사 공식 계정과 CEO/창립자/주요 임원의 개인 계정을 포함해서 최대 3개까지만 알려주세요.\n"
-            "반드시 아래 형식으로만 답하세요 (설명 없이 콤마로 구분된 username만):\n"
-            "username1,username2,username3\n\n"
-            "존재하지 않거나 모르면 NONE 이라고만 답하세요."
-        )
-        logger.info("[Gemini] %s 트위터 계정 탐색 요청: model=%s", ticker, gemini_model)
-        response = client.chat.completions.create(
-            model=gemini_model,
-            messages=[{"role": "user", "content": prompt}],
-        )
-        text = response.choices[0].message.content.strip()
-        logger.info("[Gemini] %s 응답: %s", ticker, text)
-        if text.upper() == "NONE" or not text:
-            logger.info("[Gemini] %s 트위터 계정 없음 (NONE 응답)", ticker)
-            return None
-        accounts = [a.strip().lstrip("@") for a in text.split(",") if a.strip()]
-        logger.info("[Gemini] %s 파싱 결과: %s", ticker, accounts)
-        return accounts if accounts else None
-    except Exception as e:
-        logger.warning("Gemini 트위터 계정 탐색 실패 [%s, model=%s]: %s", ticker, gemini_model, e)
-        return None
-
-
-DEFAULT_CONFIG = {
-    "discord_webhook_url": "YOUR_DISCORD_WEBHOOK_URL_HERE",
-    "tickers": [],
-    "check_interval_seconds": 300,
-    "monitor_sec_filings": True,
-    "sec_form_types": ["8-K"],
-    "sec_check_interval_seconds": 1800,
-    "monitor_twitter": False,
-    "twitter_check_interval_seconds": 600,
-    "twitter_accounts": {},
-    "gemini_model": DEFAULT_GEMINI_MODEL,
-    "gemini_relevance_model": DEFAULT_GEMINI_MODEL,
-    "gemini_summary_model": DEFAULT_GEMINI_MODEL,
-    "gemini_twitter_model": DEFAULT_GEMINI_MODEL,
-    "nitter_instances": [
-        "https://nitter.privacydev.net",
-        "https://nitter.poast.org",
-        "https://nitter.catsarch.com",
-        "https://nitter.unixfox.eu",
-        "https://nitter.1d4.us",
-    ],
-}
-
-
 def load_config() -> dict:
-    if not os.path.exists(CONFIG_FILE):
-        return DEFAULT_CONFIG.copy()
-    with open(CONFIG_FILE, "r", encoding="utf-8") as f:
-        cfg = json.load(f)
-    return cfg
+    return _load_app_config()
 
 
 def save_config(config: dict) -> None:
-    with open(CONFIG_FILE, "w", encoding="utf-8") as f:
-        json.dump(config, f, indent=2, ensure_ascii=False)
+    _save_app_config(config)
     print(f"✅ config.json 저장 완료")
 
 

@@ -3,12 +3,8 @@ main.py - 주식 뉴스 Discord 알람 메인 실행 파일
 
 실행: python main.py
 """
-import json
 import logging
 import logging.handlers
-import os
-import hashlib
-import re
 import time
 import schedule
 
@@ -16,18 +12,31 @@ from datetime import date, datetime
 from zoneinfo import ZoneInfo
 from typing import Dict, Set
 
+from app_state import (
+    APP_DIR,
+    SEEN_NEWS_FILE,
+    SEEN_PRICE_LEVELS_FILE,
+    SEEN_SEC_FILE,
+    SEEN_SEC_TICKERS_FILE,
+    SEEN_TWEETS_FILE,
+    DEFAULT_GEMINI_MODEL,
+    load_config,
+    load_int_map,
+    load_seen,
+    save_int_map,
+    save_seen,
+)
 from discord_bot import start_bot_thread
 from discord_notifier import send_news_alert, send_sec_alert, send_tweet_alert, send_price_alert
-from news_fetcher import fetch_all_news, ai_summarize_news
+from news_fetcher import fetch_all_news, ai_summarize_news, news_title_hash
 from price_fetcher import fetch_price
 from sec_fetcher import fetch_sec_filings, filter_sec_by_age, fetch_filing_text
 from twitter_fetcher import fetch_all_tweets
 
 # ─── 로깅 설정 ────────────────────────────────────────────────────────────────
-_APP_DIR = os.path.dirname(os.path.abspath(__file__))
-_LOG_DIR = os.path.join(_APP_DIR, "logs")
-os.makedirs(_LOG_DIR, exist_ok=True)
-_LOG_FILE = os.path.join(_LOG_DIR, "main.log")
+_LOG_DIR = APP_DIR / "logs"
+_LOG_DIR.mkdir(exist_ok=True)
+_LOG_FILE = _LOG_DIR / "main.log"
 
 logging.basicConfig(
     level=logging.INFO,
@@ -40,21 +49,6 @@ logging.basicConfig(
     ],
 )
 logger = logging.getLogger(__name__)
-
-# ─── 파일 경로 ────────────────────────────────────────────────────────────────
-CONFIG_FILE = os.path.join(_APP_DIR, "config.json")
-SEEN_NEWS_FILE = os.path.join(_APP_DIR, "seen_news.json")
-SEEN_SEC_FILE = os.path.join(_APP_DIR, "seen_sec.json")
-SEEN_SEC_TICKERS_FILE = os.path.join(_APP_DIR, "seen_sec_tickers.json")  # 초기화된 SEC 티커 추적
-SEEN_TWEETS_FILE = os.path.join(_APP_DIR, "seen_tweets.json")
-SEEN_PRICE_LEVELS_FILE = os.path.join(_APP_DIR, "seen_price_levels.json")
-DEFAULT_GEMINI_MODEL = "gemini-3.1-flash-lite"
-
-
-# ─── 유틸 함수 ────────────────────────────────────────────────────────────────
-def load_config() -> dict:
-    with open(CONFIG_FILE, "r", encoding="utf-8") as f:
-        return json.load(f)
 
 
 def _gemini_summary_model(config: dict) -> str:
@@ -75,61 +69,14 @@ def _gemini_relevance_model(config: dict) -> str:
     )
 
 
-def load_seen(filepath: str) -> Set[str]:
-    """seen 파일 로드. dict 형식이면 7일 초과 항목 자동 제거."""
-    if os.path.exists(filepath):
-        with open(filepath, "r", encoding="utf-8") as f:
-            data = json.load(f)
-        if isinstance(data, list):
-            return set(data)
-        elif isinstance(data, dict):
-            cutoff = int(time.time()) - (7 * 24 * 3600)
-            return {k for k, v in data.items() if isinstance(v, (int, float)) and v >= cutoff}
-    return set()
-
-
-def save_seen(filepath: str, seen: Set[str]) -> None:
-    """seen 파일 저장. {id: timestamp} 형식으로 저장, 7일 초과 항목 자동 제거."""
-    now = int(time.time())
-    cutoff = now - (7 * 24 * 3600)
-    ts_map: Dict[str, int] = {}
-    if os.path.exists(filepath):
-        try:
-            with open(filepath, "r", encoding="utf-8") as f:
-                data = json.load(f)
-            if isinstance(data, dict):
-                ts_map = data
-        except Exception:
-            pass
-    result: Dict[str, int] = {}
-    for item_id in seen:
-        ts = ts_map.get(item_id, now)
-        if ts >= cutoff:
-            result[item_id] = ts
-    with open(filepath, "w", encoding="utf-8") as f:
-        json.dump(result, f, indent=2)
-
-
 def load_price_levels() -> Dict[str, int]:
     """주가 알림 레벨 기록을 파일에서 로드합니다.
 
     예: {"ATOM_20260527_up": 4} 는 해당 거래 세션에서 +20%까지 알림 완료를 뜻합니다.
     봇을 재시작해도 같은 레벨 알림이 다시 오지 않도록 파일에 저장합니다.
     """
-    if not os.path.exists(SEEN_PRICE_LEVELS_FILE):
-        return {}
     try:
-        with open(SEEN_PRICE_LEVELS_FILE, "r", encoding="utf-8") as f:
-            data = json.load(f)
-        if not isinstance(data, dict):
-            return {}
-        result: Dict[str, int] = {}
-        for key, value in data.items():
-            try:
-                result[str(key)] = int(value)
-            except (TypeError, ValueError):
-                continue
-        return result
+        return load_int_map(SEEN_PRICE_LEVELS_FILE)
     except Exception as e:
         logger.warning("주가 알림 기록 로드 실패: %s", e)
         return {}
@@ -138,90 +85,9 @@ def load_price_levels() -> Dict[str, int]:
 def save_price_levels(levels: Dict[str, int]) -> None:
     """주가 알림 레벨 기록을 파일에 저장합니다."""
     try:
-        with open(SEEN_PRICE_LEVELS_FILE, "w", encoding="utf-8") as f:
-            json.dump(levels, f, indent=2, ensure_ascii=False)
+        save_int_map(SEEN_PRICE_LEVELS_FILE, levels)
     except Exception as e:
         logger.warning("주가 알림 기록 저장 실패: %s", e)
-
-
-def _normalize_news_title(title: str) -> str:
-    """재배포 기사 중복 제거용 제목 정규화.
-
-    출처명이 제목 끝에 붙는 케이스를 일반 규칙으로 제거합니다.
-    예:
-      Why SoFi Stock Soared 13% in May
-      Why SoFi Stock Soared 13% in May - AOL.com
-      Why SoFi Stock Soared 13% in May - Yahoo Finance
-      Why SoFi Stock Soared 13% in May | The Motley Fool
-    위 케이스들이 같은 title_norm 키가 되도록 정규화합니다.
-    """
-    normalized = (title or "").lower().strip()
-    normalized = normalized.replace("’", "'").replace("‘", "'")
-    normalized = normalized.replace("“", '"').replace("”", '"')
-    normalized = normalized.replace("–", "-").replace("—", "-")
-
-    # 티커 태그 제거
-    normalized = re.sub(r"^\[[a-z]{1,8}\]\s*", "", normalized)
-
-    # 끝에 붙은 URL/도메인형 출처 제거
-    # 예: " - AOL.com", " | investing.com", " - fool.com"
-    normalized = re.sub(
-        r"\s+[-|:]\s+[a-z0-9][a-z0-9&.,' /-]{0,45}\."
-        r"(com|net|org|io|ai|co|news|finance)\s*$",
-        "",
-        normalized,
-    )
-
-    # RSS가 붙이는 대표 출처/매체 접미사 제거
-    suffixes = [
-        "yahoo finance", "the motley fool", "motley fool",
-        "24/7 wall st.", "24/7 wall st", "247 wall st.", "247 wall st", "wall st.", "wall st",
-        "barron's", "barrons", "benzinga", "reuters", "marketwatch",
-        "investor's business daily", "investors business daily", "seeking alpha", "zacks",
-        "globenewswire", "business wire", "pr newswire", "cnbc", "msn", "google news",
-        "ap news", "associated press", "morningstar", "investopedia", "kiplinger",
-        "nasdaq", "gurufocus", "thestreet", "the street",
-    ]
-    publisher_pattern = "|".join(re.escape(s) for s in suffixes)
-    normalized = re.sub(r"\s+[-|:]\s+(" + publisher_pattern + r")\s*$", "", normalized)
-    normalized = re.sub(r"\s+\((" + publisher_pattern + r")\)\s*$", "", normalized)
-
-    # 조금 더 넓은 매체명 접미사 패턴
-    # 예: " - ABC News", " - Some Market Report"
-    normalized = re.sub(
-        r"\s+[-|:]\s+[a-z0-9&.,' /-]{2,45}\s+"
-        r"(news|finance|wire|journal|times|post|daily|report|reports|media|market|markets|street|st\.?)\.?\s*$",
-        "",
-        normalized,
-    )
-
-    # 남은 출처형 짧은 꼬리 제거
-    # 예: " - marketbeat", " | stock titan" 같은 짧은 publisher 꼬리
-    m = re.search(r"\s+[-|:]\s+([a-z0-9&.,' /-]{2,35})$", normalized)
-    if m:
-        suffix = m.group(1).strip()
-        suffix_words = suffix.split()
-        looks_like_publisher = (
-            len(suffix_words) <= 4
-            and not any(ch.isdigit() for ch in suffix)
-            and len(normalized[:m.start()].split()) >= 4
-        )
-        if looks_like_publisher:
-            normalized = normalized[:m.start()].strip()
-
-    # 따옴표/소유격/특수문자 정리
-    normalized = normalized.replace("'s", "s")
-    normalized = re.sub(r"[^a-z0-9가-힣]+", " ", normalized)
-    normalized = re.sub(r"\s+", " ", normalized).strip()
-    return normalized
-
-def _title_hash(title: str) -> str:
-    """뉴스 제목의 정규화 해시 키를 반환합니다.
-
-    ID가 다르고 소스가 달라도 제목이 같은 재배포 기사는 같은 키가 됩니다.
-    """
-    normalized = _normalize_news_title(title)
-    return "title_norm_" + hashlib.md5(normalized.encode("utf-8")).hexdigest()[:16]
 
 
 def _price_session_id(info: dict) -> str:
@@ -360,7 +226,7 @@ def check_news(config: dict, seen: Set[str], initial: bool = False) -> int:
         items = fetch_all_news(ticker, config)
         for item in items:
             item_id = item["id"]
-            title_hash = _title_hash(item.get("title", ""))
+            title_hash = news_title_hash(item.get("title", ""))
             if not item_id:
                 logger.info("[%s] 뉴스 제외: item_id 없음 — %s", ticker, item.get("title", "")[:120])
                 continue
