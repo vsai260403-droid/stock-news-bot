@@ -7,6 +7,7 @@ news_fetcher.py - 여러 소스에서 뉴스 수집
   finnhub    - Finnhub Company News (무료 API 키: https://finnhub.io/register)
 """
 import calendar
+import html
 import json
 import logging
 import re
@@ -19,6 +20,42 @@ import requests
 from ai_provider import ai_generate_with_fallback
 
 logger = logging.getLogger(__name__)
+
+
+def _strip_html(text: str) -> str:
+    """RSS/HTML 조각을 사람이 읽기 좋은 평문으로 정리합니다."""
+    if not text:
+        return ""
+    text = html.unescape(str(text))
+    text = re.sub(r"<script\b[^>]*>.*?</script>", " ", text, flags=re.IGNORECASE | re.DOTALL)
+    text = re.sub(r"<style\b[^>]*>.*?</style>", " ", text, flags=re.IGNORECASE | re.DOTALL)
+    text = re.sub(r"<[^>]+>", " ", text)
+    text = re.sub(r"\s+", " ", text).strip()
+    return text
+
+
+def _entry_summary(entry: Any, title: str = "") -> str:
+    """feedparser entry에서 기사 요약/본문 발췌 후보를 추출합니다."""
+    candidates: List[str] = []
+
+    for key in ("summary", "description", "subtitle"):
+        value = entry.get(key, "")
+        if value:
+            candidates.append(str(value))
+
+    for content in entry.get("content", []) or []:
+        if isinstance(content, dict) and content.get("value"):
+            candidates.append(str(content.get("value")))
+
+    title_clean = _strip_html(title).lower()
+    for candidate in candidates:
+        cleaned = _strip_html(candidate)
+        if not cleaned:
+            continue
+        if title_clean and cleaned.lower() == title_clean:
+            continue
+        return cleaned[:1200]
+    return ""
 
 
 # ── 관련성 필터 ───────────────────────────────────────────────────────────────
@@ -209,6 +246,7 @@ def fetch_yahoo_news(ticker: str, company_name: str = "") -> List[Dict[str, Any]
                 logger.info("[%s] Yahoo 뉴스 제외: item_id 없음 — %s", ticker, entry.get("title", "")[:120])
                 continue
             title = entry.get("title", "(제목 없음)")
+            summary = _entry_summary(entry, title)
             published = entry.get("published_parsed")
             ts = int(calendar.timegm(published)) if published else 0
             source_obj = getattr(entry, "source", None)
@@ -216,6 +254,7 @@ def fetch_yahoo_news(ticker: str, company_name: str = "") -> List[Dict[str, Any]
             result.append({
                 "id": f"yahoo_rss_{raw_id}",
                 "title": title,
+                "summary": summary,
                 "link": entry.get("link", ""),
                 "publisher": publisher,
                 "publish_time": ts,
@@ -263,10 +302,12 @@ def fetch_google_news_rss(ticker: str, company_name: str = "") -> List[Dict[str,
             published = entry.get("published_parsed")
             ts = int(calendar.timegm(published)) if published else 0
             title = entry.get("title", "(제목 없음)")
+            summary = _entry_summary(entry, title)
 
             result.append({
                 "id": f"gnews_{raw_id}",
                 "title": title,
+                "summary": summary,
                 "link": entry.get("link", ""),
                 "publisher": publisher,
                 "publish_time": ts,
@@ -307,6 +348,7 @@ def fetch_finnhub_news(ticker: str, api_key: str) -> List[Dict[str, Any]]:
             result.append({
                 "id": f"finnhub_{news_id}",
                 "title": item.get("headline", "(제목 없음)"),
+                "summary": _strip_html(item.get("summary", ""))[:1200],
                 "link": item.get("url", ""),
                 "publisher": item.get("source", "Finnhub"),
                 "publish_time": item.get("datetime", 0),
@@ -425,6 +467,7 @@ def ai_summarize_news(
     gemini_api_key: str = "",
     gemini_model: Optional[str] = None,
     config: Optional[dict] = None,
+    content: str = "",
 ) -> Optional[str]:
     """OAuth 우선, Gemini fallback으로 뉴스·SEC·트윗을 번역·요약합니다."""
     effective_config = dict(config or {})
@@ -447,14 +490,20 @@ def ai_summarize_news(
             f"출처: {publisher}\n{title}"
         )
     else:
+        content = _strip_html(content)[:2500]
+        content_block = (
+            f"\n기사 내용/요약 발췌:\n{content}\n"
+            if content
+            else "\n기사 내용/요약 발췌: 제공되지 않음\n"
+        )
         prompt = (
             "당신은 주식 투자자를 위한 뉴스 번역·요약 도우미입니다. "
-            "영어 뉴스 제목과 출처를 받으면, "
-            "한국어로 자연스럽게 번역하고 투자자에게 중요한 핵심 내용을 "
-            "충분히 이해할 수 있도록 간결하게 설명해 주세요.\n"
+            "영어 뉴스 제목, 출처, 기사 내용/요약 발췌를 받으면, "
+            "한국어로 자연스럽게 번역하고 투자자에게 중요한 핵심 내용을 간결하게 설명해 주세요. "
+            "제공된 내용 밖의 수치나 원인은 추정하지 말고, 내용이 부족하면 본문 확인이 필요하다고 말해 주세요.\n"
             "그 다음 줄바꿈 후, 이 뉴스에 대해 일반 투자자 시각에서 "
             "짧고 재치있는 한마디를 ➡️ 이모지와 함께 한 줄로 추가해 주세요.\n\n"
-            f"출처: {publisher}\n제목: {title}"
+            f"출처: {publisher}\n제목: {title}{content_block}"
         )
 
     return ai_generate_with_fallback(

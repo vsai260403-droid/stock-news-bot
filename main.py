@@ -383,6 +383,7 @@ def check_news(config: dict, seen: Set[str], initial: bool = False) -> int:
                         gemini_api_key,
                         gemini_model,
                         config=config,
+                        content=item.get("summary", ""),
                     )
                 if send_news_alert(webhook_url, item):
                     count += 1

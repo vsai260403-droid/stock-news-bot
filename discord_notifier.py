@@ -73,6 +73,7 @@ def send_news_alert(webhook_url: str, item: Dict[str, Any]) -> bool:
     publisher = item.get("publisher", "Unknown")
     publish_time = item.get("publish_time", 0)
     ai_summary: Optional[str] = item.get("ai_summary") or None
+    summary: str = str(item.get("summary") or "").strip()
 
     if ai_summary:
         description = (
@@ -81,10 +82,12 @@ def send_news_alert(webhook_url: str, item: Dict[str, Any]) -> bool:
             f"**시간:** {_fmt_local(publish_time)}"
         )
     else:
-        description = (
-            f"**출처:** {publisher}\n"
-            f"**시간:** {_fmt_local(publish_time)}"
-        )
+        desc_lines = []
+        if summary and summary.lower() != title.lower():
+            desc_lines.append(f"**내용:** {summary[:700]}")
+        desc_lines.append(f"**출처:** {publisher}")
+        desc_lines.append(f"**시간:** {_fmt_local(publish_time)}")
+        description = "\n".join(desc_lines)
 
     fields = []
     if link:
