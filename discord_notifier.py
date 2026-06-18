@@ -523,3 +523,63 @@ def send_chart_signal_alert(webhook_url: str, signal: Dict[str, Any]) -> bool:
     }
     payload = {"username": "주식 뉴스 봇 📈", "embeds": [embed]}
     return _post(webhook_url, payload)
+
+
+def send_fear_greed_alert(webhook_url: str, item: Dict[str, Any]) -> bool:
+    """CNN Fear & Greed Index 장전 브리핑을 Discord로 전송합니다."""
+    score = float(item.get("score", 0.0) or 0.0)
+    rating_ko = item.get("rating_ko", "N/A")
+    source_url = item.get("source_url")
+
+    if score <= 25:
+        color = 15158332
+        icon = "🔴"
+    elif score <= 45:
+        color = 15105570
+        icon = "🟠"
+    elif score < 55:
+        color = 9807270
+        icon = "⚪"
+    elif score < 75:
+        color = 5763719
+        icon = "🟢"
+    else:
+        color = 3066993
+        icon = "🟣"
+
+    def fmt_delta(value) -> str:
+        if not isinstance(value, (int, float)):
+            return "N/A"
+        sign = "+" if value >= 0 else ""
+        return f"{sign}{value:.1f}"
+
+    fields = [
+        {
+            "name": "변화",
+            "value": (
+                f"전일 대비: **{fmt_delta(item.get('delta_close'))}**\n"
+                f"1주 대비: **{fmt_delta(item.get('delta_week'))}**\n"
+                f"1개월 대비: **{fmt_delta(item.get('delta_month'))}**"
+            ),
+            "inline": True,
+        },
+        {
+            "name": "장전 참고",
+            "value": str(item.get("commentary") or "시장 심리 참고용 지표입니다.")[:1024],
+            "inline": False,
+        },
+    ]
+
+    embed: Dict[str, Any] = {
+        "title": f"{icon} CNN Fear & Greed Index: {score:.0f} ({rating_ko})",
+        "color": color,
+        "description": "미국장 시작 전 시장 심리 브리핑입니다. 개별 종목 차트 신호와 함께 참고하세요.",
+        "fields": fields,
+        "footer": {"text": "CNN Markets  •  Fear & Greed"},
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+    }
+    if source_url:
+        embed["url"] = source_url
+
+    payload = {"username": "주식 뉴스 봇 📈", "embeds": [embed]}
+    return _post(webhook_url, payload)

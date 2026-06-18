@@ -17,6 +17,7 @@ SEEN_LINKEDIN_FILE = APP_DIR / "seen_linkedin.json"
 SEEN_OFFICIAL_FILE = APP_DIR / "seen_official.json"
 SEEN_PRICE_LEVELS_FILE = APP_DIR / "seen_price_levels.json"
 SEEN_CHART_SIGNALS_FILE = APP_DIR / "seen_chart_signals.json"
+SEEN_FEAR_GREED_FILE = APP_DIR / "seen_fear_greed.json"
 
 DEFAULT_GEMINI_MODEL = "gemini-3.1-flash-lite"
 
@@ -76,6 +77,8 @@ DEFAULT_CONFIG: Dict[str, Any] = {
     "monitor_chart_signals": True,
     "chart_signal_check_interval_seconds": 600,
     "chart_signal_cooldown_hours": 6,
+    "monitor_fear_greed": True,
+    "fear_greed_alert_time_kst": "21:00",
 }
 
 

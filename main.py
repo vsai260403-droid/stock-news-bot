@@ -16,6 +16,7 @@ from ai_provider import ai_fallback_available
 from app_state import (
     APP_DIR,
     SEEN_CHART_SIGNALS_FILE,
+    SEEN_FEAR_GREED_FILE,
     SEEN_NEWS_FILE,
     SEEN_PRICE_LEVELS_FILE,
     SEEN_SEC_FILE,
@@ -34,7 +35,8 @@ from app_state import (
 )
 from chart_signal_analyzer import analyze_chart_signal, signal_identity
 from discord_bot import start_bot_thread
-from discord_notifier import send_chart_signal_alert, send_linkedin_alert, send_news_alert, send_official_alert, send_sec_alert, send_tweet_alert, send_price_alert
+from discord_notifier import send_chart_signal_alert, send_fear_greed_alert, send_linkedin_alert, send_news_alert, send_official_alert, send_sec_alert, send_tweet_alert, send_price_alert
+from fear_greed_fetcher import fetch_fear_greed_index
 from linkedin_fetcher import fetch_all_linkedin_posts
 from market_signal_analyzer import analyze_price_move
 from news_fetcher import fetch_all_news, ai_summarize_news, news_title_hash
@@ -112,6 +114,14 @@ def save_chart_signal_seen(seen: Dict[str, int], cooldown_hours: int) -> None:
     save_json(SEEN_CHART_SIGNALS_FILE, {key: ts for key, ts in seen.items() if ts >= cutoff})
 
 
+def load_fear_greed_seen() -> Dict[str, int]:
+    return load_seen_map(SEEN_FEAR_GREED_FILE, retention_days=14)
+
+
+def save_fear_greed_seen(seen: Dict[str, int]) -> None:
+    save_json(SEEN_FEAR_GREED_FILE, seen)
+
+
 def _price_session_id(info: dict) -> str:
     """PRE/REGULAR/POST가 공유하는 거래 세션 ID를 반환합니다."""
     session_id = info.get("trading_session_id")
@@ -181,6 +191,40 @@ def check_chart_signals(config: dict, seen_signals: Dict[str, int], initial: boo
             logger.warning("[%s] 차트 신호 Discord 전송 실패: %s", ticker, signal.get("title"))
 
     return count
+
+
+def check_fear_greed(config: dict, seen: Dict[str, int], force: bool = False) -> int:
+    if not config.get("monitor_fear_greed", True):
+        return 0
+
+    webhook_url = config["discord_webhook_url"]
+    now_kst = datetime.now(ZoneInfo("Asia/Seoul"))
+    today_key = now_kst.strftime("%Y-%m-%d")
+    alert_time = str(config.get("fear_greed_alert_time_kst", "21:00") or "21:00")
+    try:
+        hour_str, minute_str = alert_time.split(":", 1)
+        target_hour = int(hour_str)
+        target_minute = int(minute_str)
+    except Exception:
+        target_hour, target_minute = 21, 0
+
+    due = now_kst.hour > target_hour or (now_kst.hour == target_hour and now_kst.minute >= target_minute)
+    if not force and not due:
+        return 0
+    if today_key in seen:
+        return 0
+
+    item = fetch_fear_greed_index()
+    if not item:
+        logger.warning("CNN Fear & Greed 지수 조회 실패")
+        return 0
+
+    if send_fear_greed_alert(webhook_url, item):
+        seen[today_key] = int(time.time())
+        logger.info("CNN Fear & Greed 브리핑 전송: score=%.1f rating=%s", item.get("score", 0.0), item.get("rating"))
+        return 1
+    logger.warning("CNN Fear & Greed Discord 전송 실패")
+    return 0
 
 
 def check_prices(config: dict) -> int:
@@ -564,6 +608,7 @@ def main() -> None:
     seen_official: Set[str] = load_seen(SEEN_OFFICIAL_FILE)
     chart_signal_cooldown_hours = int(config.get("chart_signal_cooldown_hours", 6) or 6)
     seen_chart_signals: Dict[str, int] = load_chart_signal_seen(chart_signal_cooldown_hours)
+    seen_fear_greed: Dict[str, int] = load_fear_greed_seen()
 
     news_interval = config.get("check_interval_seconds", 300)
     sec_interval = config.get("sec_check_interval_seconds", 1800)
@@ -578,6 +623,7 @@ def main() -> None:
     monitor_official = config.get("monitor_official", False)
     monitor_price = config.get("monitor_price", True)
     monitor_chart_signals = config.get("monitor_chart_signals", True)
+    monitor_fear_greed = config.get("monitor_fear_greed", True)
 
     start_bot_thread(config)
 
@@ -617,6 +663,8 @@ def main() -> None:
     logger.info("주가 변동 알람: %.1f%% 이상 시 알람  (체크 주기: %d초)", threshold, price_interval)
     if monitor_chart_signals:
         logger.info("차트 타점 알림: ON  (체크 주기: %d초, 쿨다운: %d시간)", chart_signal_interval, chart_signal_cooldown_hours)
+    if monitor_fear_greed:
+        logger.info("CNN Fear & Greed 브리핑: ON  (KST %s)", config.get("fear_greed_alert_time_kst", "21:00"))
     logger.info("=" * 60)
 
     logger.info("기존 뉴스 초기 로드 중 (알람 없음)...")
@@ -711,6 +759,12 @@ def main() -> None:
         if count > 0:
             logger.info("차트 타점 알림 전송: %d건", count)
 
+    def fear_greed_job() -> None:
+        cfg = load_config()
+        count = check_fear_greed(cfg, seen_fear_greed)
+        if count > 0:
+            save_fear_greed_seen(seen_fear_greed)
+
     schedule.every(news_interval).seconds.do(news_job)
     if monitor_sec:
         schedule.every(sec_interval).seconds.do(sec_job)
@@ -722,6 +776,8 @@ def main() -> None:
         schedule.every(price_interval).seconds.do(price_job)
     if monitor_chart_signals:
         schedule.every(chart_signal_interval).seconds.do(chart_signal_job)
+    if monitor_fear_greed:
+        schedule.every(60).seconds.do(fear_greed_job)
 
     while True:
         schedule.run_pending()

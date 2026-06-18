@@ -31,6 +31,8 @@
   "monitor_chart_signals": true,
   "chart_signal_check_interval_seconds": 600,
   "chart_signal_cooldown_hours": 6,
+  "monitor_fear_greed": true,
+  "fear_greed_alert_time_kst": "21:00",
   "twitter_accounts": {
     "TSLA": ["Tesla", "elonmusk"],
     "AAPL": ["Apple", "tim_cook"],
