@@ -308,7 +308,8 @@ def chatgpt_oauth_generate(prompt: str, config: dict) -> str:
 def gemini_generate(prompt: str, config: dict) -> str:
     api_key = str(config.get("gemini_api_key") or "").strip()
     model = str(
-        config.get("gemini_summary_model")
+        config.get("gemini_request_model")
+        or config.get("gemini_summary_model")
         or config.get("gemini_model")
         or "gemini-3.1-flash-lite"
     ).strip()
@@ -389,3 +390,21 @@ def ai_generate_with_fallback(
 
     logger.warning("[AI/%s] 모든 provider 실패: %s", purpose, last_error)
     return None
+
+
+def ai_fallback_available(config: dict) -> bool:
+    providers = config.get(
+        "ai_provider_order",
+        ["openai_oauth", "gemini"],
+    )
+    if not isinstance(providers, list):
+        providers = ["openai_oauth", "gemini"]
+
+    normalized = {str(provider).strip().lower() for provider in providers}
+    if "openai_oauth" in normalized and config.get("openai_oauth_enabled", True):
+        auth_path = str(config.get("openai_oauth_auth_file") or DEFAULT_AUTH_PATH)
+        if Path(os.path.expanduser(auth_path)).exists():
+            return True
+    if "gemini" in normalized and str(config.get("gemini_api_key") or "").strip():
+        return True
+    return False

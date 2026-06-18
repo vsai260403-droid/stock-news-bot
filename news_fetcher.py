@@ -357,7 +357,10 @@ def _ai_relevance_filter(
 
     raw = ai_generate_with_fallback(
         prompt,
-        config,
+        {
+            **config,
+            "gemini_request_model": config.get("gemini_relevance_model") or config.get("gemini_model"),
+        },
         purpose=f"{ticker} 관련성 필터",
     )
     if not raw:

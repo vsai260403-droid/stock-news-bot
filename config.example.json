@@ -21,6 +21,7 @@
   "linkedin_max_age_hours": 24,
   "linkedin_feeds": [],
   "monitor_official": false,
+  "official_auto_discover": true,
   "official_check_interval_seconds": 900,
   "official_max_age_hours": 72,
   "official_feeds": [],

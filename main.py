@@ -12,6 +12,7 @@ from datetime import date, datetime
 from zoneinfo import ZoneInfo
 from typing import Dict, Set
 
+from ai_provider import ai_fallback_available
 from app_state import (
     APP_DIR,
     SEEN_NEWS_FILE,
@@ -224,6 +225,7 @@ def check_news(config: dict, seen: Set[str], initial: bool = False) -> int:
     tickers = config.get("tickers", [])
     gemini_api_key = config.get("gemini_api_key", "").strip()
     gemini_model = _gemini_summary_model(config)
+    ai_available = ai_fallback_available(config)
     count = 0
 
     for ticker in tickers:
@@ -246,7 +248,7 @@ def check_news(config: dict, seen: Set[str], initial: bool = False) -> int:
                 )
                 continue
             if not initial:
-                if gemini_api_key:
+                if ai_available:
                     item["ai_summary"] = ai_summarize_news(
                         item.get("title", ""),
                         item.get("publisher", ""),
@@ -276,6 +278,7 @@ def check_sec(config: dict, seen: Set[str], initial: bool = False) -> int:
     max_age_days = config.get("sec_max_age_days", 30)
     gemini_api_key = config.get("gemini_api_key", "").strip()
     gemini_model = _gemini_summary_model(config)
+    ai_available = ai_fallback_available(config)
     count = 0
 
     for ticker in tickers:
@@ -288,7 +291,7 @@ def check_sec(config: dict, seen: Set[str], initial: bool = False) -> int:
                 continue
             seen.add(item_id)
             if not initial:
-                if gemini_api_key:
+                if ai_available:
                     desc = item.get("description") or item.get("form_type", "")
                     body = fetch_filing_text(
                         item.get("link", ""),
@@ -322,6 +325,7 @@ def check_tweets(config: dict, seen: Set[str], initial: bool = False) -> int:
     twitter_on = config.get("monitor_twitter", False)
     gemini_api_key = config.get("gemini_api_key", "").strip()
     gemini_model = _gemini_summary_model(config)
+    ai_available = ai_fallback_available(config)
     count = 0
 
     if twitter_on:
@@ -335,12 +339,13 @@ def check_tweets(config: dict, seen: Set[str], initial: bool = False) -> int:
                     continue
                 seen.add(item_id)
                 if not initial:
-                    if gemini_api_key and not item.get("ai_summary"):
+                    if ai_available and not item.get("ai_summary"):
                         item["ai_summary"] = ai_summarize_news(
                             item.get("text") or item.get("title", ""),
                             f"@{item.get('username', '')}",
                             gemini_api_key,
                             gemini_model,
+                            config=config,
                         )
                     if send_tweet_alert(webhook_url, item):
                         count += 1
@@ -370,12 +375,13 @@ def check_tweets(config: dict, seen: Set[str], initial: bool = False) -> int:
                     continue
                 seen.add(item_id)
                 if not initial:
-                    if gemini_api_key and not tweet.get("ai_summary"):
+                    if ai_available and not tweet.get("ai_summary"):
                         tweet["ai_summary"] = ai_summarize_news(
                             tweet.get("text") or tweet.get("title", ""),
                             f"@{username}",
                             gemini_api_key,
                             gemini_model,
+                            config=config,
                         )
                     if send_tweet_alert(webhook_url, tweet):
                         count += 1
@@ -397,6 +403,7 @@ def check_linkedin(config: dict, seen: Set[str], initial: bool = False) -> int:
     webhook_url = config["discord_webhook_url"]
     gemini_api_key = config.get("gemini_api_key", "").strip()
     gemini_model = _gemini_summary_model(config)
+    ai_available = ai_fallback_available(config)
     max_age_hours = config.get("linkedin_max_age_hours", 24)
     cutoff_ts = int(time.time()) - (max_age_hours * 3600) if max_age_hours > 0 else 0
     count = 0
@@ -417,7 +424,7 @@ def check_linkedin(config: dict, seen: Set[str], initial: bool = False) -> int:
         seen.add(item_id)
 
         if not initial:
-            if gemini_api_key and not item.get("ai_summary"):
+            if ai_available and not item.get("ai_summary"):
                 item["ai_summary"] = ai_summarize_news(
                     item.get("text") or item.get("title", ""),
                     item.get("account", "LinkedIn"),
@@ -445,6 +452,7 @@ def check_official(config: dict, seen: Set[str], initial: bool = False) -> int:
     webhook_url = config["discord_webhook_url"]
     gemini_api_key = config.get("gemini_api_key", "").strip()
     gemini_model = _gemini_summary_model(config)
+    ai_available = ai_fallback_available(config)
     max_age_hours = config.get("official_max_age_hours", 72)
     cutoff_ts = int(time.time()) - (max_age_hours * 3600) if max_age_hours > 0 else 0
     count = 0
@@ -462,7 +470,7 @@ def check_official(config: dict, seen: Set[str], initial: bool = False) -> int:
         seen.add(item_id)
 
         if not initial:
-            if gemini_api_key and not item.get("ai_summary"):
+            if ai_available and not item.get("ai_summary"):
                 item["ai_summary"] = ai_summarize_news(
                     item.get("summary") or item.get("title", ""),
                     item.get("name", "Official"),

@@ -22,12 +22,16 @@ ticker_manager.py - 티커 및 설정 관리 CLI
     python ticker_manager.py official-remove TSLA
     python ticker_manager.py official-on
     python ticker_manager.py official-off
+
+    티커 add 시 official_auto_discover=true이면 공식 IR/Newsroom URL도 자동 등록합니다.
 """
 import logging
 import sys
 from typing import List
 
+from ai_provider import ai_fallback_available
 from app_state import DEFAULT_GEMINI_MODEL, load_config as _load_app_config, save_config as _save_app_config
+from official_source_finder import KNOWN_OFFICIAL_SOURCES, append_official_source, official_source_exists, remove_official_sources_for_ticker, _gemini_find_official_source
 from twitter_fetcher import KNOWN_ACCOUNTS
 from twitter_account_finder import _gemini_find_twitter_accounts
 
@@ -67,6 +71,7 @@ def cmd_list(config: dict) -> None:
     print(f"│  Gemini 관련성   : {config.get('gemini_relevance_model', config.get('gemini_model', DEFAULT_GEMINI_MODEL))}")
     print(f"│  Gemini 요약     : {config.get('gemini_summary_model', config.get('gemini_model', DEFAULT_GEMINI_MODEL))}")
     print(f"│  Gemini 트위터   : {config.get('gemini_twitter_model', config.get('gemini_model', DEFAULT_GEMINI_MODEL))}")
+    print(f"│  Gemini 공식페이지: {config.get('gemini_official_model', config.get('gemini_model', DEFAULT_GEMINI_MODEL))}")
     sec = config.get("monitor_sec_filings", False)
     print(f"│  SEC 공시 모니터 : {'ON  (' + ', '.join(config.get('sec_form_types', [])) + ')' if sec else 'OFF'}")
     if sec:
@@ -96,6 +101,8 @@ def cmd_add(config: dict, tickers: List[str]) -> None:
     twitter_accounts: dict = config.setdefault("twitter_accounts", {})
     gemini_api_key = config.get("gemini_api_key", "").strip()
     twitter_model = _gemini_model(config, "gemini_twitter_model")
+    official_model = _gemini_model(config, "gemini_official_model")
+    official_auto = config.get("official_auto_discover", True)
     added: List[str] = []
     for t in tickers:
         t = t.upper().strip()
@@ -111,17 +118,15 @@ def cmd_add(config: dict, tickers: List[str]) -> None:
         # 트위터 계정 자동 설정 (이미 직접 설정한 경우 덮어쓰지 않음)
         if t in twitter_accounts:
             print(f"  ✅ {t} — 추가됨")
-            continue
-
         # 1순위: KNOWN_ACCOUNTS 하드코딩
-        if t in KNOWN_ACCOUNTS:
+        elif t in KNOWN_ACCOUNTS:
             twitter_accounts[t] = KNOWN_ACCOUNTS[t]
             accs_str = ", ".join("@" + a for a in KNOWN_ACCOUNTS[t])
             print(f"  ✅ {t} — 추가됨  (트위터 자동: {accs_str})")
-        # 2순위: Gemini로 탐색
-        elif gemini_api_key:
-            print(f"  ✅ {t} — 추가됨  (Gemini로 트위터 계정 탐색 중... model={twitter_model})")
-            accounts = _gemini_find_twitter_accounts(t, gemini_api_key, twitter_model)
+        # 2순위: AI fallback으로 탐색
+        elif ai_fallback_available(config):
+            print(f"  ✅ {t} — 추가됨  (AI로 트위터 계정 탐색 중... Gemini fallback model={twitter_model})")
+            accounts = _gemini_find_twitter_accounts(t, gemini_api_key, twitter_model, config)
             if accounts:
                 twitter_accounts[t] = accounts
                 accs_str = ", ".join("@" + a for a in accounts)
@@ -130,6 +135,15 @@ def cmd_add(config: dict, tickers: List[str]) -> None:
                 print(f"       Gemini 탐색 결과 없음 — 수동 등록: python ticker_manager.py twitter-add {t} @account")
         else:
             print(f"  ✅ {t} — 추가됨  (트위터 계정 미등록)")
+
+        if official_auto and not official_source_exists(config.setdefault("official_feeds", []), t):
+            source = None
+            if t in KNOWN_OFFICIAL_SOURCES or ai_fallback_available(config):
+                source = _gemini_find_official_source(t, gemini_api_key, official_model, config)
+            if source and append_official_source(config, source):
+                print(f"       공식 페이지 자동 등록: {source['name']} — {source['url']}")
+            elif ai_fallback_available(config):
+                print(f"       공식 페이지 자동 탐색 결과 없음 — 수동 등록: python ticker_manager.py official-add {t} NAME URL")
 
     if added:
         save_config(config)
@@ -147,8 +161,10 @@ def cmd_remove(config: dict, tickers: List[str]) -> None:
             existing.remove(t)
             if t in twitter_accounts:
                 del twitter_accounts[t]
+            removed_official = remove_official_sources_for_ticker(config, t)
             removed.append(t)
-            print(f"  🗑️  {t} — 제거됨 (트위터 계정도 삭제)")
+            suffix = ", 공식 페이지도 삭제" if removed_official else ""
+            print(f"  🗑️  {t} — 제거됨 (트위터 계정도 삭제{suffix})")
     if removed:
         save_config(config)
 
@@ -172,6 +188,7 @@ def cmd_set_gemini_model(config: dict, model: str) -> None:
     config.setdefault("gemini_relevance_model", model)
     config.setdefault("gemini_summary_model", model)
     config.setdefault("gemini_twitter_model", model)
+    config.setdefault("gemini_official_model", model)
     save_config(config)
     print(f"Gemini 기본 모델 설정 완료: {model}")
 

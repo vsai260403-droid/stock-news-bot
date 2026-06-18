@@ -9,7 +9,7 @@ discord_bot.py - Discord Bot을 통한 티커 관리 명령어
   5. config.json 의 discord_bot_token 에 Bot Token 입력
 
 【명령어】
-  !add AAPL MSFT      — 티커 추가 (Gemini로 트위터 계정 자동 탐색)
+    !add AAPL MSFT      — 티커 추가 (AI로 트위터/공식 페이지 자동 탐색)
   !remove TSLA        — 티커 제거 (트위터 계정도 삭제)
   !list               — 등록된 티커 목록
   !status             — 시스템 상태
@@ -30,7 +30,9 @@ discord_bot.py - Discord Bot을 통한 티커 관리 명령어
     !official-remove 1                  — 공식 페이지 제거
     !official-on / !official-off        — 공식 페이지 알람 ON/OFF
 
-  !set-gemini-key AIza...  — Gemini API 키 (트위터 자동 탐색)
+    !add 시 official_auto_discover=true이면 공식 IR/Newsroom URL도 자동 등록
+
+    !set-gemini-key AIza...  — Gemini API 키 (AI fallback용)
   !set-openai-key sk-...   — OpenAI API 키 (AI 요약)
   !set-interval 300        — 뉴스 체크 주기 (초)
   !set-webhook URL         — Discord Webhook URL
@@ -42,7 +44,9 @@ from typing import Optional
 
 import requests
 
+from ai_provider import ai_fallback_available
 from app_state import SEEN_NEWS_FILE, load_config, load_seen_map, save_config, save_json
+from official_source_finder import KNOWN_OFFICIAL_SOURCES, append_official_source, official_source_exists, remove_official_sources_for_ticker, _gemini_find_official_source
 from twitter_fetcher import KNOWN_ACCOUNTS
 from twitter_account_finder import _gemini_find_twitter_accounts
 
@@ -158,6 +162,7 @@ def _make_bot(prefix: str):
         cfg = _load_config()
         current_set = set(t.upper() for t in cfg.get("tickers", []))
         added, already = [], []
+        official_added = []
 
         twitter_accounts: dict = cfg.setdefault("twitter_accounts", {})
         invalid = []
@@ -185,15 +190,30 @@ def _make_bot(prefix: str):
                 if t in KNOWN_ACCOUNTS:
                     twitter_accounts[t] = KNOWN_ACCOUNTS[t]
                 else:
-                    # Gemini로 트위터 계정 탐색
+                    # AI fallback으로 트위터 계정 탐색
                     gemini_key = cfg.get("gemini_api_key", "").strip()
-                    if gemini_key:
-                        await ctx.send(f"🔎 **{t}** Gemini로 트위터 계정 탐색 중...")
+                    if ai_fallback_available(cfg):
+                        await ctx.send(f"🔎 **{t}** AI로 트위터 계정 탐색 중...")
                         accounts = await loop.run_in_executor(
-                            None, _gemini_find_twitter_accounts, t, gemini_key
+                            None, _gemini_find_twitter_accounts, t, gemini_key, str(cfg.get("gemini_twitter_model") or cfg.get("gemini_model") or "gemini-3.1-flash-lite"), cfg
                         )
                         if accounts:
                             twitter_accounts[t] = accounts
+
+            if cfg.get("official_auto_discover", True) and not official_source_exists(cfg.setdefault("official_feeds", []), t):
+                gemini_key = cfg.get("gemini_api_key", "").strip()
+                official_model = str(
+                    cfg.get("gemini_official_model")
+                    or cfg.get("gemini_model")
+                    or "gemini-3.1-flash-lite"
+                )
+                if ai_fallback_available(cfg) or t in KNOWN_OFFICIAL_SOURCES:
+                    await ctx.send(f"🏢 **{t}** 공식 IR/Newsroom 페이지 탐색 중...")
+                    source = await loop.run_in_executor(
+                        None, _gemini_find_official_source, t, gemini_key, official_model, cfg
+                    )
+                    if source and append_official_source(cfg, source):
+                        official_added.append(source)
 
         if added:
             _save_config(cfg)
@@ -207,6 +227,8 @@ def _make_bot(prefix: str):
             accs = cfg.get("twitter_accounts", {}).get(t, [])
             acc_str = f"  (트위터: {', '.join('@' + a for a in accs)})" if accs else "  (트위터 계정 없음 — `!twitter-add {t} @계정`으로 수동 등록)".format(t=t)
             lines.append(f"✅ **{t}** 추가됨{acc_str}")
+        for source in official_added:
+            lines.append(f"🏢 공식 페이지 자동 등록: **[{source['ticker']}] {source['name']}** — {source['url']}")
         for t in already:
             lines.append(f"⚠️ **{t}** 이미 등록됨")
         await ctx.send("\n".join(lines) or "추가할 유효한 티커가 없습니다.")
@@ -230,6 +252,7 @@ def _make_bot(prefix: str):
                 # 트위터 계정도 같이 삭제
                 if t in twitter_accounts:
                     del twitter_accounts[t]
+                remove_official_sources_for_ticker(cfg, t)
                 removed.append(t)
             else:
                 not_found.append(t)
@@ -919,10 +942,11 @@ def _make_bot(prefix: str):
             await ctx.send(f"📄 **{ticker}** 공시 {len(filings)}건 수집됨 — Discord 알람 전송 중...")
             from news_fetcher import ai_summarize_news
             gemini_api_key = cfg.get("gemini_api_key", "").strip()
+            ai_available = ai_fallback_available(cfg)
             sent = 0
             for filing in filings[:3]:  # 최대 3건만 테스트 전송
                 filing["ticker"] = ticker
-                if gemini_api_key and not filing.get("ai_summary"):
+                if ai_available and not filing.get("ai_summary"):
                     desc = filing.get("description") or filing.get("form_type", "")
                     body = fetch_filing_text(
                         filing.get("link", ""),
@@ -940,6 +964,7 @@ def _make_bot(prefix: str):
                         summary_input,
                         "SEC EDGAR",
                         gemini_api_key,
+                        config=cfg,
                     )
                 if send_sec_alert(webhook_url, filing):
                     sent += 1
@@ -1056,7 +1081,7 @@ def _make_bot(prefix: str):
         openai_key = cfg.get("openai_api_key", "").strip()
         ai_str = "✅ 활성화" if openai_key else "❌ 키 없음 (`!set-openai-key sk-...`)"
         gemini_key = cfg.get("gemini_api_key", "").strip()
-        gemini_str = "✅ 활성화" if gemini_key else "❌ 키 없음 (`!set-gemini-key`)"
+        ai_search_str = "✅ 활성화" if ai_fallback_available(cfg) else "❌ AI provider 없음 (`!set-gemini-key` 또는 OAuth 설정)"
         sec_str = f"ON ({sec_interval}초)" if monitor_sec else "OFF"
         twitter_str = "🟢 ON" if monitor_twitter else "🔴 OFF"
         linkedin_str = f"🟢 ON ({len(cfg.get('linkedin_feeds', []))}개)" if monitor_linkedin else "🔴 OFF"
@@ -1078,7 +1103,7 @@ def _make_bot(prefix: str):
             f"• 뉴스 중요도 필터: {news_filter_str}\n"
             f"• Finnhub: {finnhub_str}\n"
             f"• AI 한글 요약: {ai_str}\n"
-            f"• 트위터 자동 탐색 (Gemini): {gemini_str}\n"
+            f"• AI 자동 탐색: {ai_search_str}\n"
             f"• SEC 공시 감시: {sec_str}\n"
             f"• 트위터 알람: {twitter_str}\n"
             f"• LinkedIn 알람: {linkedin_str}\n"
@@ -1138,7 +1163,7 @@ def _make_bot(prefix: str):
             "**[ 설정 ]**\n"
             "`!news-filter` — 뉴스 중요도 필터 상태/강도 확인\n"
             "`!news-filter strict` — 중요 뉴스만 더 엄격하게 수신\n"
-            "`!set-gemini-key AIza...` — Gemini API 키 (트위터 자동 탐색용, DM 권장)\n"
+            "`!set-gemini-key AIza...` — Gemini API 키 (AI fallback용, DM 권장)\n"
             "`!set-openai-key sk-...` — OpenAI API 키 (AI 요약용, DM 권장)\n"
             "`!set-interval 300` — 뉴스 체크 주기 (초)\n"
             "`!set-sec-interval 1800` — SEC 공시 체크 주기 (초)\n"
