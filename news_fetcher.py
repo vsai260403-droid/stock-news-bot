@@ -194,6 +194,132 @@ def _local_relevance_filter(
     return relevant
 
 
+_IMPORTANT_NEWS_PATTERNS = [
+    (4, "실적/가이던스", r"\b(earnings|quarterly results|financial results|q[1-4].*results|revenue|profit|eps|guidance|preliminary results|raises guidance|cuts guidance)\b"),
+    (4, "인수합병", r"\b(merger|acquisition|acquires|acquired by|buyout|takeover|strategic acquisition|definitive agreement)\b"),
+    (3, "계약/파트너십", r"\b(partnership|collaboration|contract|agreement|order|award|customer win|supplier deal|license agreement)\b"),
+    (3, "제품/승인", r"\b(fda|approval|clearance|clinical trial|phase [123]|drug|patent|product launch|launches|unveils|production|deliveries|shipments)\b"),
+    (3, "규제/법적", r"\b(sec|doj|ftc|investigation|lawsuit|settlement|antitrust|probe|recall|regulatory|fine|sanction)\b"),
+    (3, "자본정책", r"\b(stock split|dividend|buyback|repurchase|offering|secondary offering|debt offering|notes offering|bankruptcy|chapter 11|delisting)\b"),
+    (3, "경영진 변화", r"\b(ceo|cfo|coo|chief executive|chief financial|resigns|steps down|appoints|names .* ceo|names .* cfo)\b"),
+    (3, "보안/운영 리스크", r"\b(cyberattack|data breach|outage|plant shutdown|factory shutdown|supply disruption)\b"),
+]
+
+_LOW_VALUE_NEWS_PATTERNS = [
+    ("보유 지분/주식 매매", r"\b(13f|form 4|insider(?:s)?|institutional investor|hedge fund|asset management|capital management|wealth management|advisors)\b.*\b(buys?|sells?|sold|bought|purchases?|shares acquired|shares sold|stake|position|holdings?)\b"),
+    ("보유 지분/주식 매매", r"\b(buys?|sells?|sold|bought|purchases?|disposes?|reduces?|raises?|boosts?|cuts?|trims?)\b.*\b(stake|position|holdings?|shares of|shares in)\b"),
+    ("분석가/목표가", r"\b(analyst|analysts|price target|target price|rating|upgrade[sd]?|downgrade[sd]?|initiates coverage|maintains .* rating|brokerage|wall street)\b"),
+    ("전망/의견성 기사", r"\b(should you buy|is .* a buy|buy sell or hold|better buy|where will .* stock|where .* stock will|prediction|forecast|could .* stock|will .* stock|what'?s next|upside|downside|bull case|bear case)\b"),
+    ("추천/리스트 기사", r"\b(best stocks|top stocks|stocks to buy|stock to buy|watchlist|millionaire-maker|3 stocks|three stocks|2 stocks|two stocks|undervalued stocks)\b"),
+]
+
+
+def _news_filter_text(item: Dict[str, Any]) -> str:
+    return "\n".join(
+        str(item.get(key, "") or "")
+        for key in ("title", "summary", "publisher", "source")
+    )
+
+
+def _importance_score(item: Dict[str, Any]) -> tuple[int, List[str]]:
+    text = _news_filter_text(item).lower()
+    score = 0
+    signals: List[str] = []
+    for points, label, pattern in _IMPORTANT_NEWS_PATTERNS:
+        if re.search(pattern, text, flags=re.IGNORECASE):
+            score += points
+            signals.append(label)
+    return score, signals
+
+
+def _low_value_reason(item: Dict[str, Any]) -> str:
+    text = _news_filter_text(item).lower()
+    for label, pattern in _LOW_VALUE_NEWS_PATTERNS:
+        if re.search(pattern, text, flags=re.IGNORECASE):
+            return label
+    return ""
+
+
+def _configured_min_importance(config: dict) -> int:
+    try:
+        return int(config.get("news_importance_min_score", 2))
+    except (TypeError, ValueError):
+        return 2
+
+
+def _keyword_list(config: dict, key: str) -> List[str]:
+    value = config.get(key, [])
+    if not isinstance(value, list):
+        return []
+    return [str(item).strip().lower() for item in value if str(item).strip()]
+
+
+def _local_importance_filter(
+    items: List[Dict[str, Any]],
+    ticker: str,
+    config: dict,
+) -> List[Dict[str, Any]]:
+    """저신호 기사(보유 지분 변동, 전망성 칼럼 등)를 제외합니다."""
+    if not config.get("news_importance_filter_enabled", True):
+        return items
+
+    min_score = _configured_min_importance(config)
+    always_include = _keyword_list(config, "news_always_include_keywords")
+    always_exclude = _keyword_list(config, "news_excluded_keywords")
+    important: List[Dict[str, Any]] = []
+
+    for item in items:
+        title = item.get("title", "")
+        text = _news_filter_text(item).lower()
+
+        excluded_keyword = next((kw for kw in always_exclude if kw in text), "")
+        if excluded_keyword:
+            logger.info(
+                "[%s] 뉴스 제외: 사용자 제외 키워드(%s) — %s | source=%s",
+                ticker,
+                excluded_keyword,
+                title[:140],
+                item.get("source", ""),
+            )
+            continue
+
+        included_keyword = next((kw for kw in always_include if kw in text), "")
+        if included_keyword:
+            important.append(item)
+            continue
+
+        low_reason = _low_value_reason(item)
+        if low_reason:
+            logger.info(
+                "[%s] 뉴스 제외: 저신호 뉴스(%s) — %s | source=%s",
+                ticker,
+                low_reason,
+                title[:140],
+                item.get("source", ""),
+            )
+            continue
+
+        score, signals = _importance_score(item)
+        if score >= min_score:
+            item["importance_score"] = score
+            item["importance_signals"] = signals
+            important.append(item)
+        else:
+            logger.info(
+                "[%s] 뉴스 제외: 중요도 점수 미달(score=%d/%d) — %s | source=%s",
+                ticker,
+                score,
+                min_score,
+                title[:140],
+                item.get("source", ""),
+            )
+
+    skipped = len(items) - len(important)
+    if skipped > 0:
+        logger.info("[%s] 중요도 필터: %d건 제외, %d건 통과", ticker, skipped, len(important))
+    return important
+
+
 # ── Gemini 배치 관련성 필터 ──────────────────────────────────────────────────────
 def _ai_relevance_filter(
     items: List[Dict[str, Any]],
@@ -491,6 +617,13 @@ def fetch_all_news(ticker: str, config: dict) -> List[Dict[str, Any]]:
             )
         else:
             all_items = filtered
+
+    if all_items:
+        all_items = _local_importance_filter(
+            all_items,
+            ticker.upper(),
+            config,
+        )
 
     # 시간 필터: 설정된 시간(기본 24시간)보다 오래된 뉴스 제외
     max_age_hours = config.get("news_max_age_hours", 24)

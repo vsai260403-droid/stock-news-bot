@@ -642,6 +642,48 @@ def _make_bot(prefix: str):
         _save_config(cfg)
         await ctx.send(f"✅ 뉴스 체크 주기: **{val}초**로 변경됨 (봇 재시작 후 적용)")
 
+    # ── !news-filter ─────────────────────────────────────────────────────────
+    @bot.command(name="news-filter")
+    async def cmd_news_filter(ctx, mode: str = ""):
+        cfg = _load_config()
+        current_on = cfg.get("news_importance_filter_enabled", True)
+        current_score = int(cfg.get("news_importance_min_score", 2) or 2)
+
+        if not mode:
+            status = "🟢 ON" if current_on else "🔴 OFF"
+            await ctx.send(
+                f"뉴스 중요도 필터: **{status}**\n"
+                f"현재 강도: **{current_score}**\n"
+                "설정: `!news-filter on` / `!news-filter off` / `!news-filter loose` / `!news-filter normal` / `!news-filter strict`"
+            )
+            return
+
+        normalized = mode.lower().strip()
+        if normalized in ("on", "enable", "enabled"):
+            cfg["news_importance_filter_enabled"] = True
+            message = f"🟢 뉴스 중요도 필터 **ON** (강도 {current_score})"
+        elif normalized in ("off", "disable", "disabled"):
+            cfg["news_importance_filter_enabled"] = False
+            message = "🔴 뉴스 중요도 필터 **OFF**"
+        elif normalized in ("loose", "low", "1"):
+            cfg["news_importance_filter_enabled"] = True
+            cfg["news_importance_min_score"] = 1
+            message = "🟢 뉴스 중요도 필터 **느슨하게** 설정 (강도 1)"
+        elif normalized in ("normal", "medium", "2"):
+            cfg["news_importance_filter_enabled"] = True
+            cfg["news_importance_min_score"] = 2
+            message = "🟢 뉴스 중요도 필터 **보통** 설정 (강도 2)"
+        elif normalized in ("strict", "high", "3"):
+            cfg["news_importance_filter_enabled"] = True
+            cfg["news_importance_min_score"] = 3
+            message = "🟢 뉴스 중요도 필터 **엄격하게** 설정 (강도 3)"
+        else:
+            await ctx.send("사용법: `!news-filter on|off|loose|normal|strict`")
+            return
+
+        _save_config(cfg)
+        await ctx.send(message)
+
     # ── !set-sec-interval ─────────────────────────────────────────────────────
     @bot.command(name="set-sec-interval")
     async def cmd_set_sec_interval(ctx, seconds: str = ""):
@@ -814,6 +856,8 @@ def _make_bot(prefix: str):
         sec_interval = cfg.get("sec_check_interval_seconds", 1800)
         monitor_sec = cfg.get("monitor_sec_filings", False)
         monitor_twitter = cfg.get("monitor_twitter", False)
+        news_filter = cfg.get("news_importance_filter_enabled", True)
+        news_filter_score = cfg.get("news_importance_min_score", 2)
         sources = cfg.get("news_sources", ["yahoo", "google_rss"])
         finnhub_key = cfg.get("finnhub_api_key", "").strip()
         twitter_accounts: dict = cfg.get("twitter_accounts", {})
@@ -825,6 +869,7 @@ def _make_bot(prefix: str):
         gemini_str = "✅ 활성화" if gemini_key else "❌ 키 없음 (`!set-gemini-key`)"
         sec_str = f"ON ({sec_interval}초)" if monitor_sec else "OFF"
         twitter_str = "🟢 ON" if monitor_twitter else "🔴 OFF"
+        news_filter_str = f"🟢 ON (강도 {news_filter_score})" if news_filter else "🔴 OFF"
 
         ticker_lines = []
         for t in tickers:
@@ -838,6 +883,7 @@ def _make_bot(prefix: str):
             f"• 모니터링 티커 ({len(tickers)}개): {ticker_str}\n"
             f"• 뉴스 체크 주기: {news_interval}초\n"
             f"• 뉴스 소스: {', '.join(sources)}\n"
+            f"• 뉴스 중요도 필터: {news_filter_str}\n"
             f"• Finnhub: {finnhub_str}\n"
             f"• AI 한글 요약: {ai_str}\n"
             f"• 트위터 자동 탐색 (Gemini): {gemini_str}\n"
@@ -883,6 +929,8 @@ def _make_bot(prefix: str):
             "`!sec-test AAPL` — SEC 공시 수집 테스트 (최근 공시 3건 실제 알람 전송)\n"
             "\n"
             "**[ 설정 ]**\n"
+            "`!news-filter` — 뉴스 중요도 필터 상태/강도 확인\n"
+            "`!news-filter strict` — 중요 뉴스만 더 엄격하게 수신\n"
             "`!set-gemini-key AIza...` — Gemini API 키 (트위터 자동 탐색용, DM 권장)\n"
             "`!set-openai-key sk-...` — OpenAI API 키 (AI 요약용, DM 권장)\n"
             "`!set-interval 300` — 뉴스 체크 주기 (초)\n"

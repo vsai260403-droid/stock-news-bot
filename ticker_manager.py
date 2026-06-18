@@ -190,6 +190,41 @@ def cmd_set_interval(config: dict, seconds_str: str) -> None:
         sys.exit(1)
 
 
+def cmd_news_filter(config: dict, mode: str = "") -> None:
+    current_on = config.get("news_importance_filter_enabled", True)
+    current_score = int(config.get("news_importance_min_score", 2) or 2)
+
+    if not mode:
+        print(f"뉴스 중요도 필터: {'ON' if current_on else 'OFF'} (강도 {current_score})")
+        print("사용법: python ticker_manager.py news-filter on|off|loose|normal|strict")
+        return
+
+    mode = mode.lower().strip()
+    if mode in ("on", "enable", "enabled"):
+        config["news_importance_filter_enabled"] = True
+        print(f"뉴스 중요도 필터: ON (강도 {current_score})")
+    elif mode in ("off", "disable", "disabled"):
+        config["news_importance_filter_enabled"] = False
+        print("뉴스 중요도 필터: OFF")
+    elif mode in ("loose", "low", "1"):
+        config["news_importance_filter_enabled"] = True
+        config["news_importance_min_score"] = 1
+        print("뉴스 중요도 필터: 느슨하게 (강도 1)")
+    elif mode in ("normal", "medium", "2"):
+        config["news_importance_filter_enabled"] = True
+        config["news_importance_min_score"] = 2
+        print("뉴스 중요도 필터: 보통 (강도 2)")
+    elif mode in ("strict", "high", "3"):
+        config["news_importance_filter_enabled"] = True
+        config["news_importance_min_score"] = 3
+        print("뉴스 중요도 필터: 엄격하게 (강도 3)")
+    else:
+        print("사용법: python ticker_manager.py news-filter on|off|loose|normal|strict")
+        sys.exit(1)
+
+    save_config(config)
+
+
 # ─── Twitter 관리 명령어 ──────────────────────────────────────────────────────────────
 def cmd_twitter_list(config: dict) -> None:
     """티커별 등록된 Twitter 계정 목록 출력."""
@@ -310,6 +345,9 @@ def main() -> None:
             print("사용법: python ticker_manager.py set-interval 300")
             sys.exit(1)
         cmd_set_interval(config, args[1])
+
+    elif command == "news-filter":
+        cmd_news_filter(config, args[1] if len(args) >= 2 else "")
 
     elif command == "set-gemini-key":
         if len(args) < 2:
