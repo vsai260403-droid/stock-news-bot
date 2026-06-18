@@ -5,6 +5,7 @@ config.json
 seen_news.json
 seen_sec.json
 seen_tweets.json
+seen_linkedin.json
 ticker_cik_cache.json
 
 # Python

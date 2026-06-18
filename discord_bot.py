@@ -524,6 +524,103 @@ def _make_bot(prefix: str):
             lines.append(f"⚠️ 등록되지 않은 계정: {', '.join('@'+a for a in not_found)}")
         await ctx.send("\n".join(lines) or "제거할 계정이 없습니다.")
 
+    # ── LinkedIn RSS 관리 ────────────────────────────────────────────────────
+    @bot.command(name="linkedin-on")
+    async def cmd_linkedin_on(ctx):
+        cfg = _load_config()
+        cfg["monitor_linkedin"] = True
+        _save_config(cfg)
+        feeds = cfg.get("linkedin_feeds", [])
+        if feeds:
+            await ctx.send(f"💼 LinkedIn 알람 **ON** (피드 {len(feeds)}개)")
+        else:
+            await ctx.send("💼 LinkedIn 알람 **ON**\n⚠️ 등록된 RSS 피드가 없습니다. `!linkedin-add 이름 RSS_URL` 로 추가하세요.")
+
+    @bot.command(name="linkedin-off")
+    async def cmd_linkedin_off(ctx):
+        cfg = _load_config()
+        cfg["monitor_linkedin"] = False
+        _save_config(cfg)
+        await ctx.send("🔕 LinkedIn 알람 **OFF**")
+
+    @bot.command(name="linkedin-list")
+    async def cmd_linkedin_list(ctx):
+        cfg = _load_config()
+        feeds = cfg.get("linkedin_feeds", [])
+        status = "🟢 ON" if cfg.get("monitor_linkedin", False) else "🔴 OFF"
+        if not feeds:
+            await ctx.send(
+                f"💼 LinkedIn 알람: {status}\n"
+                "등록된 RSS 피드 없음. `!linkedin-add Tesla https://rss.app/feeds/...xml` 로 추가하세요."
+            )
+            return
+
+        lines = [f"💼 LinkedIn 알람: {status} (피드 {len(feeds)}개)"]
+        for idx, feed in enumerate(feeds, 1):
+            if isinstance(feed, dict):
+                name = feed.get("name") or feed.get("account") or f"LinkedIn {idx}"
+                url = feed.get("url", "")
+            else:
+                name = f"LinkedIn {idx}"
+                url = str(feed)
+            lines.append(f"{idx}. **{name}** — {url}")
+        await ctx.send("\n".join(lines))
+
+    @bot.command(name="linkedin-add")
+    async def cmd_linkedin_add(ctx, name: str = "", url: str = ""):
+        if not name or not url:
+            await ctx.send("사용법: `!linkedin-add Tesla https://rss.app/feeds/xxxx.xml`")
+            return
+        if not url.startswith(("http://", "https://")):
+            await ctx.send("❌ RSS URL은 http:// 또는 https:// 로 시작해야 합니다.")
+            return
+
+        cfg = _load_config()
+        feeds: list = cfg.setdefault("linkedin_feeds", [])
+        for feed in feeds:
+            existing_url = feed.get("url") if isinstance(feed, dict) else str(feed)
+            if existing_url == url:
+                await ctx.send("⚠️ 이미 등록된 LinkedIn RSS URL입니다.")
+                return
+
+        feeds.append({"name": name, "account": name, "url": url})
+        cfg["monitor_linkedin"] = True
+        _save_config(cfg)
+        await ctx.send(f"✅ LinkedIn RSS 피드 추가: **{name}**\n알람: **ON**")
+
+    @bot.command(name="linkedin-remove")
+    async def cmd_linkedin_remove(ctx, index_or_name: str = ""):
+        if not index_or_name:
+            await ctx.send("사용법: `!linkedin-remove 1` 또는 `!linkedin-remove Tesla`")
+            return
+
+        cfg = _load_config()
+        feeds: list = cfg.get("linkedin_feeds", [])
+        if not feeds:
+            await ctx.send("⚠️ 제거할 LinkedIn RSS 피드가 없습니다.")
+            return
+
+        removed = None
+        try:
+            idx = int(index_or_name) - 1
+            if 0 <= idx < len(feeds):
+                removed = feeds.pop(idx)
+        except ValueError:
+            target = index_or_name.lower().strip()
+            for idx, feed in enumerate(feeds):
+                name = (feed.get("name") if isinstance(feed, dict) else f"LinkedIn {idx + 1}") or ""
+                if name.lower() == target:
+                    removed = feeds.pop(idx)
+                    break
+
+        if not removed:
+            await ctx.send("⚠️ 해당 LinkedIn RSS 피드를 찾지 못했습니다. `!linkedin-list` 로 확인하세요.")
+            return
+
+        _save_config(cfg)
+        name = removed.get("name") if isinstance(removed, dict) else str(removed)
+        await ctx.send(f"🗑️ LinkedIn RSS 피드 제거: **{name}**")
+
     # ── !price ────────────────────────────────────────────────────────────────
     @bot.command(name="price")
     async def cmd_price(ctx, ticker: str = ""):
@@ -856,6 +953,7 @@ def _make_bot(prefix: str):
         sec_interval = cfg.get("sec_check_interval_seconds", 1800)
         monitor_sec = cfg.get("monitor_sec_filings", False)
         monitor_twitter = cfg.get("monitor_twitter", False)
+        monitor_linkedin = cfg.get("monitor_linkedin", False)
         news_filter = cfg.get("news_importance_filter_enabled", True)
         news_filter_score = cfg.get("news_importance_min_score", 2)
         sources = cfg.get("news_sources", ["yahoo", "google_rss"])
@@ -869,6 +967,7 @@ def _make_bot(prefix: str):
         gemini_str = "✅ 활성화" if gemini_key else "❌ 키 없음 (`!set-gemini-key`)"
         sec_str = f"ON ({sec_interval}초)" if monitor_sec else "OFF"
         twitter_str = "🟢 ON" if monitor_twitter else "🔴 OFF"
+        linkedin_str = f"🟢 ON ({len(cfg.get('linkedin_feeds', []))}개)" if monitor_linkedin else "🔴 OFF"
         news_filter_str = f"🟢 ON (강도 {news_filter_score})" if news_filter else "🔴 OFF"
 
         ticker_lines = []
@@ -888,7 +987,8 @@ def _make_bot(prefix: str):
             f"• AI 한글 요약: {ai_str}\n"
             f"• 트위터 자동 탐색 (Gemini): {gemini_str}\n"
             f"• SEC 공시 감시: {sec_str}\n"
-            f"• 트위터 알람: {twitter_str}"
+            f"• 트위터 알람: {twitter_str}\n"
+            f"• LinkedIn 알람: {linkedin_str}"
         )
         await ctx.send(msg)
 
@@ -924,6 +1024,13 @@ def _make_bot(prefix: str):
             "`!twitter-follows` — 단독 팔로우 계정 목록\n"
             "`!twitter-unfollow-all` — 단독 팔로우 계정 전체 제거\n"
             "`!twitter-test @elonmusk` — Nitter 수집 테스트\n"
+            "\n"
+            "**[ LinkedIn 관리 ]**\n"
+            "`!linkedin-add Tesla RSS_URL` — LinkedIn RSS 변환 피드 추가\n"
+            "`!linkedin-list` — LinkedIn 피드 목록\n"
+            "`!linkedin-remove 1` — LinkedIn 피드 제거\n"
+            "`!linkedin-on` — LinkedIn 알람 활성화\n"
+            "`!linkedin-off` — LinkedIn 알람 비활성화\n"
             "\n"
             "**[ SEC 공시 ]**\n"
             "`!sec-test AAPL` — SEC 공시 수집 테스트 (최근 공시 3건 실제 알람 전송)\n"

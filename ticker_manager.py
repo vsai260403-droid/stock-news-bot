@@ -305,6 +305,90 @@ def cmd_twitter_off(config: dict) -> None:
     print("트위터 모니터링: OFF")
 
 
+# ─── LinkedIn RSS 관리 명령어 ────────────────────────────────────────────────
+def cmd_linkedin_list(config: dict) -> None:
+    feeds = config.get("linkedin_feeds", [])
+    status = "ON" if config.get("monitor_linkedin", False) else "OFF  (활성화: linkedin-on)"
+    print(f"\nLinkedIn 모니터링: {status}")
+    print("─" * 45)
+    if not feeds:
+        print("  등록된 LinkedIn RSS 피드가 없습니다.")
+        print("  예) python ticker_manager.py linkedin-add Tesla https://rss.app/feeds/xxxx.xml")
+    else:
+        for idx, feed in enumerate(feeds, 1):
+            if isinstance(feed, dict):
+                name = feed.get("name") or feed.get("account") or f"LinkedIn {idx}"
+                url = feed.get("url", "")
+            else:
+                name = f"LinkedIn {idx}"
+                url = str(feed)
+            print(f"  {idx}. {name}: {url}")
+    print()
+
+
+def cmd_linkedin_add(config: dict, name: str, url: str) -> None:
+    name = name.strip()
+    url = url.strip()
+    if not name or not url:
+        print("사용법: python ticker_manager.py linkedin-add NAME RSS_URL")
+        sys.exit(1)
+    if not url.startswith(("http://", "https://")):
+        print("⚠️  RSS URL은 http:// 또는 https:// 로 시작해야 합니다.")
+        sys.exit(1)
+
+    feeds: list = config.setdefault("linkedin_feeds", [])
+    for feed in feeds:
+        existing_url = feed.get("url") if isinstance(feed, dict) else str(feed)
+        if existing_url == url:
+            print("⚠️  이미 등록된 LinkedIn RSS URL입니다.")
+            return
+
+    feeds.append({"name": name, "account": name, "url": url})
+    config["monitor_linkedin"] = True
+    save_config(config)
+    print(f"LinkedIn RSS 피드 추가: {name}")
+
+
+def cmd_linkedin_remove(config: dict, index_or_name: str) -> None:
+    feeds: list = config.get("linkedin_feeds", [])
+    if not feeds:
+        print("⚠️  제거할 LinkedIn RSS 피드가 없습니다.")
+        return
+
+    removed = None
+    try:
+        idx = int(index_or_name) - 1
+        if 0 <= idx < len(feeds):
+            removed = feeds.pop(idx)
+    except ValueError:
+        target = index_or_name.lower().strip()
+        for idx, feed in enumerate(feeds):
+            name = (feed.get("name") if isinstance(feed, dict) else f"LinkedIn {idx + 1}") or ""
+            if name.lower() == target:
+                removed = feeds.pop(idx)
+                break
+
+    if not removed:
+        print("⚠️  해당 LinkedIn RSS 피드를 찾지 못했습니다.")
+        return
+
+    save_config(config)
+    name = removed.get("name") if isinstance(removed, dict) else str(removed)
+    print(f"LinkedIn RSS 피드 제거: {name}")
+
+
+def cmd_linkedin_on(config: dict) -> None:
+    config["monitor_linkedin"] = True
+    save_config(config)
+    print("LinkedIn 모니터링: ON")
+
+
+def cmd_linkedin_off(config: dict) -> None:
+    config["monitor_linkedin"] = False
+    save_config(config)
+    print("LinkedIn 모니터링: OFF")
+
+
 # ─── 메인 ─────────────────────────────────────────────────────────────────────
 def print_usage() -> None:
     print(__doc__)
@@ -381,6 +465,27 @@ def main() -> None:
 
     elif command == "twitter-off":
         cmd_twitter_off(config)
+
+    elif command == "linkedin-list":
+        cmd_linkedin_list(config)
+
+    elif command == "linkedin-add":
+        if len(args) < 3:
+            print("사용법: python ticker_manager.py linkedin-add NAME RSS_URL")
+            sys.exit(1)
+        cmd_linkedin_add(config, args[1], args[2])
+
+    elif command == "linkedin-remove":
+        if len(args) < 2:
+            print("사용법: python ticker_manager.py linkedin-remove 1")
+            sys.exit(1)
+        cmd_linkedin_remove(config, args[1])
+
+    elif command == "linkedin-on":
+        cmd_linkedin_on(config)
+
+    elif command == "linkedin-off":
+        cmd_linkedin_off(config)
 
     else:
         print(f"알 수 없는 명령어: {command}")

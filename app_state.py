@@ -13,6 +13,7 @@ SEEN_NEWS_FILE = APP_DIR / "seen_news.json"
 SEEN_SEC_FILE = APP_DIR / "seen_sec.json"
 SEEN_SEC_TICKERS_FILE = APP_DIR / "seen_sec_tickers.json"
 SEEN_TWEETS_FILE = APP_DIR / "seen_tweets.json"
+SEEN_LINKEDIN_FILE = APP_DIR / "seen_linkedin.json"
 SEEN_PRICE_LEVELS_FILE = APP_DIR / "seen_price_levels.json"
 
 DEFAULT_GEMINI_MODEL = "gemini-3.1-flash-lite"
@@ -43,6 +44,10 @@ DEFAULT_CONFIG: Dict[str, Any] = {
     "monitor_twitter": False,
     "twitter_check_interval_seconds": 600,
     "twitter_accounts": {},
+    "monitor_linkedin": False,
+    "linkedin_check_interval_seconds": 900,
+    "linkedin_max_age_hours": 24,
+    "linkedin_feeds": [],
     "tweet_max_age_hours": 6,
     "global_tweet_max_age_hours": 24,
     "twitter_stale_max_age_hours": 24,

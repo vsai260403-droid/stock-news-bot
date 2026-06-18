@@ -162,6 +162,57 @@ def send_tweet_alert(webhook_url: str, item: Dict[str, Any]) -> bool:
     return _post(webhook_url, payload)
 
 
+def send_linkedin_alert(webhook_url: str, item: Dict[str, Any]) -> bool:
+    """LinkedIn RSS 변환 피드 알람을 Discord로 전송합니다."""
+    account = item.get("account", "LinkedIn")
+    title = item.get("title", "LinkedIn 업데이트")[:250]
+    text = item.get("text", "")[:1000]
+    link: Optional[str] = item.get("link") or None
+    publish_time = item.get("publish_time", 0)
+    ai_summary: Optional[str] = item.get("ai_summary") or None
+
+    if ai_summary:
+        description = f"🤖 **AI 요약 (한국어)**\n{ai_summary}\n\n**원문:** {text or title}"
+    else:
+        description = text or title
+
+    fields = [
+        {
+            "name": "게시 시간",
+            "value": _fmt_local(publish_time),
+            "inline": True,
+        },
+        {
+            "name": "페이지",
+            "value": account,
+            "inline": True,
+        },
+    ]
+    if link:
+        fields.append({
+            "name": "🔗 원문 링크",
+            "value": f"[LinkedIn에서 보기]({link})",
+            "inline": False,
+        })
+
+    embed: Dict[str, Any] = {
+        "title": f"💼  {account}  —  {title}",
+        "color": 3447003,
+        "description": description[:1200] if description else "(내용 없음)",
+        "fields": fields,
+        "footer": {"text": "LinkedIn Alert"},
+        "timestamp": _fmt_iso_utc(publish_time),
+    }
+    if link:
+        embed["url"] = link
+
+    payload = {
+        "username": "주식 뉴스 봇 📈",
+        "embeds": [embed],
+    }
+    return _post(webhook_url, payload)
+
+
 def send_sec_alert(webhook_url: str, item: Dict[str, Any]) -> bool:
     """SEC EDGAR 공시 알람을 Discord로 전송합니다."""
     ticker = item.get("ticker", "")

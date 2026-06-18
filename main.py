@@ -19,6 +19,7 @@ from app_state import (
     SEEN_SEC_FILE,
     SEEN_SEC_TICKERS_FILE,
     SEEN_TWEETS_FILE,
+    SEEN_LINKEDIN_FILE,
     DEFAULT_GEMINI_MODEL,
     load_config,
     load_int_map,
@@ -27,7 +28,8 @@ from app_state import (
     save_seen,
 )
 from discord_bot import start_bot_thread
-from discord_notifier import send_news_alert, send_sec_alert, send_tweet_alert, send_price_alert
+from discord_notifier import send_linkedin_alert, send_news_alert, send_sec_alert, send_tweet_alert, send_price_alert
+from linkedin_fetcher import fetch_all_linkedin_posts
 from news_fetcher import fetch_all_news, ai_summarize_news, news_title_hash
 from price_fetcher import fetch_price
 from sec_fetcher import fetch_sec_filings, filter_sec_by_age, fetch_filing_text
@@ -385,6 +387,54 @@ def check_tweets(config: dict, seen: Set[str], initial: bool = False) -> int:
     return count
 
 
+# ─── LinkedIn 체크 ───────────────────────────────────────────────────────────
+def check_linkedin(config: dict, seen: Set[str], initial: bool = False) -> int:
+    if not config.get("monitor_linkedin", False):
+        return 0
+
+    webhook_url = config["discord_webhook_url"]
+    gemini_api_key = config.get("gemini_api_key", "").strip()
+    gemini_model = _gemini_summary_model(config)
+    max_age_hours = config.get("linkedin_max_age_hours", 24)
+    cutoff_ts = int(time.time()) - (max_age_hours * 3600) if max_age_hours > 0 else 0
+    count = 0
+
+    for item in fetch_all_linkedin_posts(config):
+        if cutoff_ts and item.get("publish_time", 0) and item.get("publish_time", 0) < cutoff_ts:
+            logger.info(
+                "[LinkedIn] 시간 초과 skip: %s | publish_time=%s",
+                item.get("title", "")[:120],
+                item.get("publish_time"),
+            )
+            continue
+
+        item_id = item.get("id", "")
+        if not item_id or item_id in seen:
+            logger.info("[LinkedIn] 이미 seen skip (id=%s)", item_id)
+            continue
+        seen.add(item_id)
+
+        if not initial:
+            if gemini_api_key and not item.get("ai_summary"):
+                item["ai_summary"] = ai_summarize_news(
+                    item.get("text") or item.get("title", ""),
+                    item.get("account", "LinkedIn"),
+                    gemini_api_key,
+                    gemini_model,
+                    config=config,
+                )
+            if send_linkedin_alert(webhook_url, item):
+                count += 1
+                logger.info("[LinkedIn] 알람 전송: %s", item.get("title", "")[:60])
+                time.sleep(0.5)
+            else:
+                logger.warning("[LinkedIn] Discord 전송 실패: %s", item.get("title", "")[:120])
+        else:
+            logger.info("[LinkedIn] 초기 로드 skip (id=%s)", item_id)
+
+    return count
+
+
 # ─── 메인 ─────────────────────────────────────────────────────────────────────
 def main() -> None:
     config = load_config()
@@ -396,13 +446,16 @@ def main() -> None:
     seen_sec: Set[str] = load_seen(SEEN_SEC_FILE)
     seen_sec_tickers: Set[str] = load_seen(SEEN_SEC_TICKERS_FILE)
     seen_tweets: Set[str] = load_seen(SEEN_TWEETS_FILE)
+    seen_linkedin: Set[str] = load_seen(SEEN_LINKEDIN_FILE)
 
     news_interval = config.get("check_interval_seconds", 300)
     sec_interval = config.get("sec_check_interval_seconds", 1800)
     twitter_interval = config.get("twitter_check_interval_seconds", 600)
+    linkedin_interval = config.get("linkedin_check_interval_seconds", 900)
     price_interval = config.get("price_check_interval_seconds", 300)
     monitor_sec = config.get("monitor_sec_filings", False)
     monitor_twitter = config.get("monitor_twitter", False)
+    monitor_linkedin = config.get("monitor_linkedin", False)
     monitor_price = config.get("monitor_price", True)
 
     start_bot_thread(config)
@@ -433,6 +486,9 @@ def main() -> None:
         global_accs = config.get("twitter_accounts", {}).get("_GLOBAL_", [])
         if global_accs:
             logger.info("트위터 모니터링: OFF  (전용 팔로우: %s)", ", ".join("@" + u for u in global_accs))
+    if monitor_linkedin:
+        linkedin_feeds = config.get("linkedin_feeds", [])
+        logger.info("LinkedIn 모니터링: ON  (피드 %d개, 체크 주기: %d초)", len(linkedin_feeds), linkedin_interval)
     threshold = config.get("price_alert_threshold_pct", 5.0)
     logger.info("주가 변동 알람: %.1f%% 이상 시 알람  (체크 주기: %d초)", threshold, price_interval)
     logger.info("=" * 60)
@@ -453,6 +509,11 @@ def main() -> None:
         logger.info("기존 트윗 초기 로드 중 (알람 없음)...")
         check_tweets(config, seen_tweets, initial=True)
         save_seen(SEEN_TWEETS_FILE, seen_tweets)
+
+    if monitor_linkedin:
+        logger.info("기존 LinkedIn 피드 초기 로드 중 (알람 없음)...")
+        check_linkedin(config, seen_linkedin, initial=True)
+        save_seen(SEEN_LINKEDIN_FILE, seen_linkedin)
 
     logger.info("초기 로드 완료. 새 항목이 생기면 Discord로 알람을 보냅니다.")
 
@@ -486,6 +547,13 @@ def main() -> None:
         if count > 0:
             logger.info("트위터 체크 완료 — 새 트윗: %d건", count)
 
+    def linkedin_job() -> None:
+        cfg = load_config()
+        count = check_linkedin(cfg, seen_linkedin)
+        save_seen(SEEN_LINKEDIN_FILE, seen_linkedin)
+        if count > 0:
+            logger.info("LinkedIn 체크 완료 — 새 항목: %d건", count)
+
     def price_job() -> None:
         cfg = load_config()
         count = check_prices(cfg)
@@ -496,6 +564,8 @@ def main() -> None:
     if monitor_sec:
         schedule.every(sec_interval).seconds.do(sec_job)
     schedule.every(twitter_interval).seconds.do(twitter_job)
+    if monitor_linkedin:
+        schedule.every(linkedin_interval).seconds.do(linkedin_job)
     if monitor_price:
         schedule.every(price_interval).seconds.do(price_job)
 
