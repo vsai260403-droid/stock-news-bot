@@ -22,3 +22,4 @@ logs/*.log*
 *.pid
 seen_price_levels.json
 seen_sec_tickers.json
+seen_chart_signals.json

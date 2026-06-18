@@ -16,6 +16,7 @@ SEEN_TWEETS_FILE = APP_DIR / "seen_tweets.json"
 SEEN_LINKEDIN_FILE = APP_DIR / "seen_linkedin.json"
 SEEN_OFFICIAL_FILE = APP_DIR / "seen_official.json"
 SEEN_PRICE_LEVELS_FILE = APP_DIR / "seen_price_levels.json"
+SEEN_CHART_SIGNALS_FILE = APP_DIR / "seen_chart_signals.json"
 
 DEFAULT_GEMINI_MODEL = "gemini-3.1-flash-lite"
 
@@ -72,6 +73,9 @@ DEFAULT_CONFIG: Dict[str, Any] = {
     "price_signal_analysis_enabled": True,
     "price_catalyst_lookback_hours": 24,
     "price_catalyst_max_items": 8,
+    "monitor_chart_signals": True,
+    "chart_signal_check_interval_seconds": 600,
+    "chart_signal_cooldown_hours": 6,
 }
 
 

@@ -15,6 +15,7 @@ from typing import Dict, Set
 from ai_provider import ai_fallback_available
 from app_state import (
     APP_DIR,
+    SEEN_CHART_SIGNALS_FILE,
     SEEN_NEWS_FILE,
     SEEN_PRICE_LEVELS_FILE,
     SEEN_SEC_FILE,
@@ -25,12 +26,15 @@ from app_state import (
     DEFAULT_GEMINI_MODEL,
     load_config,
     load_int_map,
+    load_seen_map,
     load_seen,
     save_int_map,
+    save_json,
     save_seen,
 )
+from chart_signal_analyzer import analyze_chart_signal, signal_identity
 from discord_bot import start_bot_thread
-from discord_notifier import send_linkedin_alert, send_news_alert, send_official_alert, send_sec_alert, send_tweet_alert, send_price_alert
+from discord_notifier import send_chart_signal_alert, send_linkedin_alert, send_news_alert, send_official_alert, send_sec_alert, send_tweet_alert, send_price_alert
 from linkedin_fetcher import fetch_all_linkedin_posts
 from market_signal_analyzer import analyze_price_move
 from news_fetcher import fetch_all_news, ai_summarize_news, news_title_hash
@@ -96,6 +100,18 @@ def save_price_levels(levels: Dict[str, int]) -> None:
         logger.warning("주가 알림 기록 저장 실패: %s", e)
 
 
+def load_chart_signal_seen(cooldown_hours: int) -> Dict[str, int]:
+    retention_days = max(1, int(cooldown_hours / 24) + 2)
+    seen = load_seen_map(SEEN_CHART_SIGNALS_FILE, retention_days=retention_days)
+    cutoff = int(time.time()) - max(1, cooldown_hours) * 3600
+    return {key: ts for key, ts in seen.items() if ts >= cutoff}
+
+
+def save_chart_signal_seen(seen: Dict[str, int], cooldown_hours: int) -> None:
+    cutoff = int(time.time()) - max(1, cooldown_hours) * 3600
+    save_json(SEEN_CHART_SIGNALS_FILE, {key: ts for key, ts in seen.items() if ts >= cutoff})
+
+
 def _price_session_id(info: dict) -> str:
     """PRE/REGULAR/POST가 공유하는 거래 세션 ID를 반환합니다."""
     session_id = info.get("trading_session_id")
@@ -129,6 +145,42 @@ def _validate_config(config: dict) -> bool:
 # "TICKER_{session_id}_up" 또는 "_down" 키 → 해당 거래 세션에서 트리거된 최대 레벨
 _price_levels: Dict[str, int] = load_price_levels()
 _trading_session: Dict[str, str] = {}
+
+
+def check_chart_signals(config: dict, seen_signals: Dict[str, int], initial: bool = False) -> int:
+    if not config.get("monitor_chart_signals", True):
+        return 0
+
+    webhook_url = config["discord_webhook_url"]
+    tickers = config.get("tickers", [])
+    cooldown_seconds = max(1, int(config.get("chart_signal_cooldown_hours", 6) or 6)) * 3600
+    now = int(time.time())
+    count = 0
+
+    for ticker in tickers:
+        signal = analyze_chart_signal(ticker, config)
+        if not signal:
+            continue
+
+        identity = f"{ticker.upper()}_{signal_identity(signal)}"
+        last_seen = int(seen_signals.get(identity, 0) or 0)
+        if last_seen and now - last_seen < cooldown_seconds:
+            logger.info("[%s] 차트 신호 중복 skip: %s", ticker, identity)
+            continue
+
+        seen_signals[identity] = now
+        if initial:
+            logger.info("[%s] 차트 신호 초기 로드 skip: %s", ticker, identity)
+            continue
+
+        if send_chart_signal_alert(webhook_url, signal):
+            count += 1
+            logger.info("[%s] 차트 신호 알림 전송: %s", ticker, signal.get("title"))
+            time.sleep(0.5)
+        else:
+            logger.warning("[%s] 차트 신호 Discord 전송 실패: %s", ticker, signal.get("title"))
+
+    return count
 
 
 def check_prices(config: dict) -> int:
@@ -510,6 +562,8 @@ def main() -> None:
     seen_tweets: Set[str] = load_seen(SEEN_TWEETS_FILE)
     seen_linkedin: Set[str] = load_seen(SEEN_LINKEDIN_FILE)
     seen_official: Set[str] = load_seen(SEEN_OFFICIAL_FILE)
+    chart_signal_cooldown_hours = int(config.get("chart_signal_cooldown_hours", 6) or 6)
+    seen_chart_signals: Dict[str, int] = load_chart_signal_seen(chart_signal_cooldown_hours)
 
     news_interval = config.get("check_interval_seconds", 300)
     sec_interval = config.get("sec_check_interval_seconds", 1800)
@@ -517,11 +571,13 @@ def main() -> None:
     linkedin_interval = config.get("linkedin_check_interval_seconds", 900)
     official_interval = config.get("official_check_interval_seconds", 900)
     price_interval = config.get("price_check_interval_seconds", 300)
+    chart_signal_interval = config.get("chart_signal_check_interval_seconds", 600)
     monitor_sec = config.get("monitor_sec_filings", False)
     monitor_twitter = config.get("monitor_twitter", False)
     monitor_linkedin = config.get("monitor_linkedin", False)
     monitor_official = config.get("monitor_official", False)
     monitor_price = config.get("monitor_price", True)
+    monitor_chart_signals = config.get("monitor_chart_signals", True)
 
     start_bot_thread(config)
 
@@ -559,6 +615,8 @@ def main() -> None:
         logger.info("공식 IR/Newsroom 모니터링: ON  (소스 %d개, 체크 주기: %d초)", len(official_feeds), official_interval)
     threshold = config.get("price_alert_threshold_pct", 5.0)
     logger.info("주가 변동 알람: %.1f%% 이상 시 알람  (체크 주기: %d초)", threshold, price_interval)
+    if monitor_chart_signals:
+        logger.info("차트 타점 알림: ON  (체크 주기: %d초, 쿨다운: %d시간)", chart_signal_interval, chart_signal_cooldown_hours)
     logger.info("=" * 60)
 
     logger.info("기존 뉴스 초기 로드 중 (알람 없음)...")
@@ -587,6 +645,11 @@ def main() -> None:
         logger.info("기존 공식 IR/Newsroom 초기 로드 중 (알람 없음)...")
         check_official(config, seen_official, initial=True)
         save_seen(SEEN_OFFICIAL_FILE, seen_official)
+
+    if monitor_chart_signals:
+        logger.info("기존 차트 타점 신호 초기 로드 중 (알람 없음)...")
+        check_chart_signals(config, seen_chart_signals, initial=True)
+        save_chart_signal_seen(seen_chart_signals, chart_signal_cooldown_hours)
 
     logger.info("초기 로드 완료. 새 항목이 생기면 Discord로 알람을 보냅니다.")
 
@@ -640,6 +703,14 @@ def main() -> None:
         if count > 0:
             logger.info("주가 변동 알람 전송: %d건", count)
 
+    def chart_signal_job() -> None:
+        cfg = load_config()
+        cooldown_hours = int(cfg.get("chart_signal_cooldown_hours", 6) or 6)
+        count = check_chart_signals(cfg, seen_chart_signals)
+        save_chart_signal_seen(seen_chart_signals, cooldown_hours)
+        if count > 0:
+            logger.info("차트 타점 알림 전송: %d건", count)
+
     schedule.every(news_interval).seconds.do(news_job)
     if monitor_sec:
         schedule.every(sec_interval).seconds.do(sec_job)
@@ -649,6 +720,8 @@ def main() -> None:
     schedule.every(official_interval).seconds.do(official_job)
     if monitor_price:
         schedule.every(price_interval).seconds.do(price_job)
+    if monitor_chart_signals:
+        schedule.every(chart_signal_interval).seconds.do(chart_signal_job)
 
     while True:
         schedule.run_pending()

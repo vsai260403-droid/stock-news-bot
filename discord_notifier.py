@@ -440,3 +440,86 @@ def send_price_alert(webhook_url: str, item: Dict[str, Any]) -> bool:
         embed["fields"] = fields
     payload = {"username": "주식 뉴스 봇 📈", "embeds": [embed]}
     return _post(webhook_url, payload)
+
+
+def send_chart_signal_alert(webhook_url: str, signal: Dict[str, Any]) -> bool:
+    """차트 기반 진입/청산 관심 신호를 Discord로 전송합니다."""
+    ticker = signal.get("ticker", "")
+    signal_type = signal.get("signal_type", "")
+    is_entry = signal_type == "entry_watch"
+    icon = "🟢" if is_entry else "🔴"
+    title = signal.get("title") or ("매수 관심 구간" if is_entry else "매도/축소 주의 구간")
+    color = 5763719 if is_entry else 15158332
+    price = signal.get("price")
+    rsi = signal.get("rsi")
+    ma5 = signal.get("ma5")
+    ma20 = signal.get("ma20")
+    ma60 = signal.get("ma60")
+    vwap = signal.get("vwap")
+    prev_low = signal.get("prev_low")
+    prev_high = signal.get("prev_high")
+    volume = signal.get("volume")
+    avg_volume = signal.get("average_volume")
+    volume_ratio = signal.get("volume_ratio")
+
+    def fmt(value) -> str:
+        return f"{value:.2f}" if isinstance(value, (int, float)) else "N/A"
+
+    reasons = signal.get("reasons") or []
+    risks = signal.get("risks") or []
+    fields = [
+        {
+            "name": "신호 점수",
+            "value": (
+                f"진입 점수: **{signal.get('entry_score', 0)}/100**\n"
+                f"청산/축소 점수: **{signal.get('exit_score', 0)}/100**"
+            ),
+            "inline": True,
+        },
+        {
+            "name": "차트 지표",
+            "value": (
+                f"현재가: **{fmt(price)}**\n"
+                f"RSI: {fmt(rsi)}\n"
+                f"VWAP: {fmt(vwap)}\n"
+                f"MA 5/20/60: {fmt(ma5)} / {fmt(ma20)} / {fmt(ma60)}"
+            ),
+            "inline": False,
+        },
+        {
+            "name": "확인 가격대",
+            "value": f"전일 저가: {fmt(prev_low)}\n전일 고가: {fmt(prev_high)}",
+            "inline": True,
+        },
+    ]
+
+    volume_lines = []
+    if isinstance(volume, (int, float)):
+        volume_lines.append(f"오늘/최근 거래량: **{volume:,.0f}**")
+    if isinstance(avg_volume, (int, float)):
+        volume_lines.append(f"평균 거래량: {avg_volume:,.0f}")
+    if isinstance(volume_ratio, (int, float)):
+        volume_lines.append(f"평균 대비: **{volume_ratio:.1f}배**")
+    if volume_lines:
+        fields.append({"name": "수급", "value": "\n".join(volume_lines)[:1024], "inline": True})
+
+    if reasons:
+        fields.append({"name": "근거", "value": "\n".join(f"• {line}" for line in reasons)[:1024], "inline": False})
+    if risks:
+        fields.append({"name": "주의점", "value": "\n".join(f"• {line}" for line in risks)[:1024], "inline": False})
+    if signal.get("ai_commentary"):
+        fields.append({"name": "AI 차트 해석", "value": str(signal.get("ai_commentary"))[:1024], "inline": False})
+
+    embed: Dict[str, Any] = {
+        "title": f"{icon} [{ticker}] {title}",
+        "color": color,
+        "description": (
+            "자동 차트 신호입니다. 매수/매도 지시가 아니라 진입·청산 판단을 돕는 체크포인트로 보세요.\n"
+            f"권장 대응 표현: **{signal.get('action', '관망')}**"
+        ),
+        "fields": fields,
+        "footer": {"text": f"Chart Signal  •  {ticker}"},
+        "timestamp": _fmt_iso_utc(signal.get("timestamp", 0)),
+    }
+    payload = {"username": "주식 뉴스 봇 📈", "embeds": [embed]}
+    return _post(webhook_url, payload)
