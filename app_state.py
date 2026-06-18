@@ -3,7 +3,7 @@ from copy import deepcopy
 import json
 import time
 from pathlib import Path
-from typing import Any, Dict, Set
+from typing import Any, Dict, Set, Union
 
 
 APP_DIR = Path(__file__).resolve().parent
@@ -72,12 +72,15 @@ DEFAULT_CONFIG: Dict[str, Any] = {
 }
 
 
-def app_path(path: str | Path) -> Path:
+PathLike = Union[str, Path]
+
+
+def app_path(path: PathLike) -> Path:
     candidate = Path(path)
     return candidate if candidate.is_absolute() else APP_DIR / candidate
 
 
-def load_json(path: str | Path, default: Any = None) -> Any:
+def load_json(path: PathLike, default: Any = None) -> Any:
     target = app_path(path)
     if not target.exists():
         return default
@@ -85,7 +88,7 @@ def load_json(path: str | Path, default: Any = None) -> Any:
         return json.load(file)
 
 
-def save_json(path: str | Path, data: Any) -> None:
+def save_json(path: PathLike, data: Any) -> None:
     target = app_path(path)
     target.parent.mkdir(parents=True, exist_ok=True)
     with target.open("w", encoding="utf-8") as file:
@@ -104,7 +107,7 @@ def save_config(config: dict) -> None:
     save_json(CONFIG_FILE, config)
 
 
-def load_seen_map(path: str | Path, retention_days: int = 7) -> Dict[str, int]:
+def load_seen_map(path: PathLike, retention_days: int = 7) -> Dict[str, int]:
     data = load_json(path, {})
     now = int(time.time())
     cutoff = now - (retention_days * 24 * 3600)
@@ -121,11 +124,11 @@ def load_seen_map(path: str | Path, retention_days: int = 7) -> Dict[str, int]:
     return result
 
 
-def load_seen(path: str | Path, retention_days: int = 7) -> Set[str]:
+def load_seen(path: PathLike, retention_days: int = 7) -> Set[str]:
     return set(load_seen_map(path, retention_days).keys())
 
 
-def save_seen(path: str | Path, seen: Set[str], retention_days: int = 7) -> None:
+def save_seen(path: PathLike, seen: Set[str], retention_days: int = 7) -> None:
     now = int(time.time())
     cutoff = now - (retention_days * 24 * 3600)
     existing = load_seen_map(path, retention_days)
@@ -139,7 +142,7 @@ def save_seen(path: str | Path, seen: Set[str], retention_days: int = 7) -> None
     save_json(path, result)
 
 
-def load_int_map(path: str | Path) -> Dict[str, int]:
+def load_int_map(path: PathLike) -> Dict[str, int]:
     data = load_json(path, {})
     if not isinstance(data, dict):
         return {}
@@ -153,5 +156,5 @@ def load_int_map(path: str | Path) -> Dict[str, int]:
     return result
 
 
-def save_int_map(path: str | Path, values: Dict[str, int]) -> None:
+def save_int_map(path: PathLike, values: Dict[str, int]) -> None:
     save_json(path, values)

@@ -14,7 +14,7 @@ import logging
 import re
 import time
 from datetime import date, timedelta
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 import requests
 
@@ -221,7 +221,7 @@ def _news_filter_text(item: Dict[str, Any]) -> str:
     )
 
 
-def _importance_score(item: Dict[str, Any]) -> tuple[int, List[str]]:
+def _importance_score(item: Dict[str, Any]) -> Tuple[int, List[str]]:
     text = _news_filter_text(item).lower()
     score = 0
     signals: List[str] = []
