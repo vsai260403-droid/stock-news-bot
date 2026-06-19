@@ -38,7 +38,7 @@ from discord_bot import start_bot_thread
 from discord_notifier import send_chart_signal_alert, send_fear_greed_alert, send_linkedin_alert, send_news_alert, send_official_alert, send_sec_alert, send_tweet_alert, send_price_alert
 from fear_greed_fetcher import fetch_fear_greed_index
 from linkedin_fetcher import fetch_all_linkedin_posts
-from market_signal_analyzer import analyze_price_move
+from market_signal_analyzer import analyze_news_signal, analyze_price_move
 from news_fetcher import fetch_all_news, ai_summarize_news, news_title_hash
 from official_fetcher import fetch_all_official_posts
 from price_fetcher import fetch_price
@@ -333,6 +333,12 @@ def check_news(config: dict, seen: Set[str], initial: bool = False) -> int:
 
     for ticker in tickers:
         items = fetch_all_news(ticker, config)
+        price_info = None
+        if not initial and config.get("news_signal_analysis_enabled", True):
+            try:
+                price_info = fetch_price(ticker)
+            except Exception as e:
+                logger.info("[%s] 뉴스 매매 참고 신호용 주가 조회 실패: %s", ticker, e)
         for item in items:
             item_id = item["id"]
             title_hash = news_title_hash(item.get("title", ""))
@@ -360,6 +366,11 @@ def check_news(config: dict, seen: Set[str], initial: bool = False) -> int:
                         config=config,
                         content=item.get("summary", ""),
                     )
+                if price_info and config.get("news_signal_analysis_enabled", True):
+                    try:
+                        item["signal_analysis"] = analyze_news_signal(item, price_info, config)
+                    except Exception as e:
+                        logger.info("[%s] 뉴스 매매 참고 신호 분석 실패: %s", ticker, e)
                 if send_news_alert(webhook_url, item):
                     count += 1
                     logger.info("[%s] 뉴스 알람 전송: %s", ticker, item["title"][:60])

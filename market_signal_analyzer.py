@@ -175,7 +175,7 @@ def _local_signal(price_info: Dict[str, Any], catalysts: List[Dict[str, Any]]) -
         label = str(top.get("label") or top.get("source_type") or "이벤트")
         cause = f"가장 가까운 촉매 후보는 {label}의 '{_short(top.get('title', ''), 70)}'입니다."
 
-    volume_note = "거래량 데이터 부족"
+    volume_note = ""
     abnormal_volume = False
     if isinstance(volume_ratio, (int, float)):
         abnormal_volume = volume_ratio >= 2.5
@@ -238,6 +238,28 @@ def analyze_price_move(price_info: Dict[str, Any], config: dict) -> Dict[str, An
     catalysts = collect_recent_catalysts(ticker, config)
     local = _local_signal(price_info, catalysts)
     ai = _ai_signal(price_info, catalysts, config)
+    if ai:
+        local.update({key: value for key, value in ai.items() if value})
+    local["catalysts"] = catalysts
+    return local
+
+
+def analyze_news_signal(news_item: Dict[str, Any], price_info: Dict[str, Any], config: dict) -> Dict[str, Any]:
+    ticker = str(news_item.get("ticker") or price_info.get("ticker") or "").upper()
+    now = _now()
+    catalysts: List[Dict[str, Any]] = []
+    _append_item(
+        catalysts,
+        news_item,
+        "news",
+        "뉴스",
+        now,
+        int(config.get("news_max_age_hours", config.get("price_catalyst_lookback_hours", 24)) or 24),
+    )
+    enriched_price_info = dict(price_info)
+    enriched_price_info["ticker"] = ticker
+    local = _local_signal(enriched_price_info, catalysts)
+    ai = _ai_signal(enriched_price_info, catalysts, config)
     if ai:
         local.update({key: value for key, value in ai.items() if value})
     local["catalysts"] = catalysts

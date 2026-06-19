@@ -74,6 +74,7 @@ def send_news_alert(webhook_url: str, item: Dict[str, Any]) -> bool:
     publish_time = item.get("publish_time", 0)
     ai_summary: Optional[str] = item.get("ai_summary") or None
     summary: str = str(item.get("summary") or "").strip()
+    signal = item.get("signal_analysis") or {}
 
     if ai_summary:
         description = (
@@ -90,6 +91,30 @@ def send_news_alert(webhook_url: str, item: Dict[str, Any]) -> bool:
         description = "\n".join(desc_lines)
 
     fields = []
+    if signal:
+        fields.append({
+            "name": "매매 참고 신호",
+            "value": (
+                f"영향도: **{signal.get('impact_score', '?')}/5**\n"
+                f"방향성: **{signal.get('direction', '중립/불명')}**\n"
+                f"신뢰도: **{signal.get('confidence', '낮음')}**"
+            ),
+            "inline": True,
+        })
+        volume_note = signal.get("volume_note") or ""
+        if volume_note:
+            marker = " 🚨" if signal.get("abnormal_volume") else ""
+            fields.append({
+                "name": "수급",
+                "value": f"{volume_note}{marker}",
+                "inline": True,
+            })
+        if signal.get("risk_note"):
+            fields.append({
+                "name": "확인할 리스크",
+                "value": str(signal.get("risk_note"))[:1024],
+                "inline": False,
+            })
     if link:
         fields.append({
             "name": "🔗 원문 링크",
@@ -369,15 +394,6 @@ def send_price_alert(webhook_url: str, item: Dict[str, Any]) -> bool:
 
     fields = []
     if signal:
-        fields.append({
-            "name": "매매 참고 신호",
-            "value": (
-                f"영향도: **{signal.get('impact_score', '?')}/5**\n"
-                f"방향성: **{signal.get('direction', '중립/불명')}**\n"
-                f"신뢰도: **{signal.get('confidence', '낮음')}**"
-            ),
-            "inline": True,
-        })
         fields.append({
             "name": "급등락 원인 후보",
             "value": str(signal.get("cause_summary") or "최근 촉매 후보 없음")[:1024],

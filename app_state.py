@@ -72,6 +72,7 @@ DEFAULT_CONFIG: Dict[str, Any] = {
     "price_check_interval_seconds": 300,
     "price_alert_threshold_pct": 5.0,
     "price_signal_analysis_enabled": True,
+    "news_signal_analysis_enabled": True,
     "price_catalyst_lookback_hours": 24,
     "price_catalyst_max_items": 8,
     "monitor_chart_signals": True,
